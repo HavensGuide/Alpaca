@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Alpaca Manager</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23256f5c'/><path d='M7 22l6-7 5 4 7-9' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><rect width="32" height="32" rx="8" fill="var(--accent)"/><path d="M7 22l6-7 5 4 7-9" stroke="white" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>Alpaca Manager</span>
+    </div>
+    <div class="topbar-right">
+      <span id="market-pill" class="pill" title="Market status">…</span>
+      <label class="account-picker">
+        <span class="sr-only">Account</span>
+        <select id="account-select" aria-label="Active account"></select>
+      </label>
+      <span id="mode-badge" class="badge"></span>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="overview">Overview</button>
+    <button class="tab" data-tab="trade">Trade</button>
+    <button class="tab" data-tab="schedules">Schedules</button>
+    <button class="tab" data-tab="rules">Price rules</button>
+    <button class="tab" data-tab="activity">Activity</button>
+    <button class="tab" data-tab="accounts">Accounts</button>
+  </nav>
+
+  <main id="main">
+    <!-- OVERVIEW -->
+    <section id="tab-overview" class="panel active">
+      <div id="no-account" class="empty hidden">
+        <h2>Welcome 👋</h2>
+        <p>Add an Alpaca account to get started. Use <b>paper</b> keys to practise safely,
+          or create a <b>demo</b> account to try everything with simulated money.</p>
+        <button class="btn primary" data-goto="accounts">Add an account</button>
+      </div>
+      <div id="overview-body">
+        <div class="stats" id="stats"></div>
+        <div class="card">
+          <div class="card-head">
+            <h2>Positions</h2>
+            <button class="btn ghost small" id="refresh-overview" title="Refresh">↻ Refresh</button>
+          </div>
+          <div id="positions" class="table-wrap"></div>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <h2>Orders</h2>
+            <div class="seg" id="orders-filter">
+              <button class="active" data-status="open">Open</button>
+              <button data-status="closed">Recent</button>
+            </div>
+          </div>
+          <div id="orders" class="table-wrap"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TRADE -->
+    <section id="tab-trade" class="panel">
+      <div class="card narrow">
+        <h2>Place an order</h2>
+        <p class="muted">Add one stock, or several to buy or sell a basket in one go.</p>
+        <div id="trade-legs"></div>
+        <div class="form-actions">
+          <button class="btn primary" id="trade-review">Review order</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- SCHEDULES -->
+    <section id="tab-schedules" class="panel">
+      <div class="section-head">
+        <div>
+          <h2>Scheduled orders</h2>
+          <p class="muted">Buy or sell automatically at a set time — once, or on repeat.
+            Times are in <span class="tz"></span>.</p>
+        </div>
+        <button class="btn primary" id="new-schedule">+ New schedule</button>
+      </div>
+      <div id="schedule-list" class="cards"></div>
+    </section>
+
+    <!-- RULES -->
+    <section id="tab-rules" class="panel">
+      <div class="section-head">
+        <div>
+          <h2>Price rules</h2>
+          <p class="muted">Floors and targets: “sell when AAPL falls below $200”, or
+            “buy when my tech basket is worth under $10,000”. Checked every
+            <span id="poll-seconds">15</span> seconds while the app is running.</p>
+        </div>
+        <div class="row-gap">
+          <button class="btn ghost" id="check-rules" title="Check all rules now">↻ Check now</button>
+          <button class="btn primary" id="new-rule">+ New rule</button>
+        </div>
+      </div>
+      <div id="rule-list" class="cards"></div>
+    </section>
+
+    <!-- ACTIVITY -->
+    <section id="tab-activity" class="panel">
+      <div class="section-head">
+        <div>
+          <h2>Activity</h2>
+          <p class="muted">Everything the app did, newest first.</p>
+        </div>
+        <label class="check"><input type="checkbox" id="activity-this-account"> This account only</label>
+      </div>
+      <div class="card"><div id="activity" class="table-wrap"></div></div>
+    </section>
+
+    <!-- ACCOUNTS -->
+    <section id="tab-accounts" class="panel">
+      <div class="section-head">
+        <div>
+          <h2>Accounts</h2>
+          <p class="muted">Get API keys from the Alpaca dashboard (Paper or Live) under “API Keys”.
+            Secrets are encrypted on this computer and never shown again.</p>
+        </div>
+        <button class="btn primary" id="new-account">+ Add account</button>
+      </div>
+      <div id="account-list" class="cards"></div>
+    </section>
+  </main>
+
+  <!-- Modal -->
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h2 id="modal-title"></h2>
+        <button class="icon-btn" id="modal-close" aria-label="Close">✕</button>
+      </div>
+      <div id="modal-body"></div>
+      <div class="modal-foot" id="modal-foot"></div>
+    </div>
+  </div>
+
+  <div id="toasts" aria-live="polite"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
