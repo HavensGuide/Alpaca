@@ -174,6 +174,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.put("/api/accounts/{account_id}")
     def update_account(account_id: int, body: AccountIn, s: Session = Depends(db)):
         acct = get_account(s, account_id)
+        new_key = body.api_key.strip()
+        # Keys come in pairs: never combine a new key ID with the old stored secret, and
+        # paper and live accounts never share keys.
+        if new_key and new_key != acct.api_key and not body.secret_key:
+            raise HTTPException(422, "You entered a new API key ID - also enter the secret key that "
+                                     "was generated with it (the old secret won't work with it).")
+        if {body.mode, acct.mode} == {"paper", "live"} and not (new_key and body.secret_key):
+            raise HTTPException(422, "Paper and live accounts use different API keys - enter both the "
+                                     f"key ID and secret for your {body.mode} account.")
         acct.name = body.name
         acct.data_feed = body.data_feed
         if body.mode != acct.mode:

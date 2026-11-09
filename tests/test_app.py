@@ -358,3 +358,28 @@ def test_auth_errors_are_explained(app, monkeypatch):
                                           "secret_key": "x"})
         assert r.status_code == 422 and "PAPER key" in r.text and "401" in r.text
         assert c.get("/api/accounts").json() == []  # nothing saved
+
+
+def test_editing_keys_requires_matching_pair(client, engine):
+    acct = client.post("/api/accounts", json={"name": "P", "mode": "paper", "api_key": "PKOLDKEY01",
+                                              "secret_key": "old-secret"}).json()
+    url = f"/api/accounts/{acct['id']}"
+    # New key ID with blank secret would pair it with the old secret -> refused.
+    r = client.put(url, json={"name": "P", "mode": "paper", "api_key": "PKNEWKEY02"})
+    assert r.status_code == 422 and "secret" in r.text
+    # Switching paper -> live without new keys -> refused.
+    r = client.put(url, json={"name": "P", "mode": "live"})
+    assert r.status_code == 422 and "different API keys" in r.text
+    with engine.sessions() as s:
+        stored = s.get(Account, acct["id"])
+        assert (stored.mode, stored.api_key) == ("paper", "PKOLDKEY01")
+        assert engine.vault.decrypt(stored.secret_enc) == "old-secret"
+    # A full new pair is saved, and the secret is stored encrypted.
+    r = client.put(url, json={"name": "P", "mode": "live", "api_key": "AKNEWKEY03", "secret_key": "new-secret"})
+    assert r.status_code == 200
+    with engine.sessions() as s:
+        stored = s.get(Account, acct["id"])
+        assert (stored.mode, stored.api_key) == ("live", "AKNEWKEY03")
+        assert engine.vault.decrypt(stored.secret_enc) == "new-secret"
+    # Renaming alone keeps the keys.
+    assert client.put(url, json={"name": "Renamed", "mode": "live"}).status_code == 200
