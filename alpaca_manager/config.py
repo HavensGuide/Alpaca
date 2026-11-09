@@ -38,6 +38,11 @@ class Settings:
         default_factory=lambda: _bool(os.environ.get("ALPACA_MANAGER_DEMO"), False)
     )
 
+    # Check API keys with Alpaca when an account is saved (disabled in tests).
+    verify_keys: bool = field(
+        default_factory=lambda: _bool(os.environ.get("ALPACA_MANAGER_VERIFY_KEYS"), True)
+    )
+
     @property
     def db_url(self) -> str:
         return f"sqlite:///{self.data_dir / 'alpaca_manager.db'}"

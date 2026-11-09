@@ -130,18 +130,18 @@ class AlpacaBroker:
         from alpaca.trading.client import TradingClient
 
         self._api_key, self._secret_key = api_key, secret_key
+        self._paper = paper
         self._trading = TradingClient(api_key, secret_key, paper=paper)
         self._data = StockHistoricalDataClient(api_key, secret_key)
         self._feed = DataFeed(data_feed)
 
-    @staticmethod
-    def _wrap(fn, *args, **kwargs):
+    def _wrap(self, fn, *args, **kwargs):
         from alpaca.common.exceptions import APIError
 
         try:
             return fn(*args, **kwargs)
         except APIError as exc:
-            raise BrokerError(f"Alpaca: {exc}") from exc
+            raise BrokerError(explain_api_error(exc, self._paper, self._feed.value)) from exc
         except Exception as exc:  # network errors etc.
             raise BrokerError(f"{type(exc).__name__}: {exc}") from exc
 
@@ -320,6 +320,30 @@ class AlpacaBroker:
                 continue  # before the account was funded
             out.append({"t": int(t), "equity": float(eq), "pl": float(pl or 0)})
         return out
+
+
+def explain_api_error(exc, paper: bool, feed: str) -> str:
+    """Turn an Alpaca APIError (sometimes a raw nginx HTML page) into a helpful message."""
+    status = getattr(exc, "status_code", None)
+    try:
+        detail = exc.message
+    except Exception:  # body is HTML or not JSON
+        detail = None
+    if status == 401 or (status is None and "401 Authorization Required" in str(exc)):
+        kind = "paper" if paper else "live"
+        other = "live" if paper else "paper"
+        return (f"Alpaca rejected this account's API keys (401). Check that: (1) they are {kind}-trading "
+                f"keys - {kind} keys don't work on a {other} account (paper keys usually start with PK, "
+                f"live keys with AK); (2) they haven't been regenerated or the paper account reset, "
+                f"which invalidates old keys; (3) the key ID and secret aren't swapped. "
+                f"Fix them under Accounts > Edit.")
+    if status == 403:
+        hint = (" Your data feed is set to SIP: that needs a market-data subscription linked to these "
+                "keys - switch the account to IEX or check the subscription." if feed == "sip" else "")
+        return f"Alpaca refused the request (403): {detail or 'not permitted for this account'}.{hint}"
+    if status == 429:
+        return "Alpaca rate limit reached (429) - wait a minute and try again."
+    return f"Alpaca: {detail or exc}"
 
 
 def _order_to_dict(o) -> dict:

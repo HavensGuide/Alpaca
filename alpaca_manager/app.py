@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from . import api_extra
 from .bots import BotRunner
-from .broker import BrokerError, Leg
+from .broker import AlpacaBroker, BrokerError, Leg
 from .config import Settings
 from .db import (Account, ActivityLog, PriceRule, ScheduledOrder, StrategyBot, as_utc,
                  make_session_factory, utcnow)
@@ -140,10 +140,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def list_accounts(s: Session = Depends(db)):
         return [account_out(a) for a in s.scalars(select(Account).order_by(Account.id))]
 
+    def check_keys(mode: str, api_key: str, secret: str, data_feed: str) -> None:
+        """Try the keys against Alpaca so bad keys are caught on the Accounts screen."""
+        if not settings.verify_keys:
+            return
+        try:
+            AlpacaBroker(api_key.strip(), secret.strip(), paper=mode == "paper",
+                         data_feed=data_feed).get_account()
+        except BrokerError as exc:
+            key = api_key.strip().upper()
+            hint = ""
+            if mode == "live" and key.startswith("PK"):
+                hint = "This looks like a PAPER key (starts with PK) but the account type is Live. "
+            elif mode == "paper" and key.startswith("AK"):
+                hint = "This looks like a LIVE key (starts with AK) but the account type is Paper. "
+            raise HTTPException(422, hint + str(exc)) from exc
+
     @app.post("/api/accounts", status_code=201)
     def create_account(body: AccountIn, s: Session = Depends(db)):
         if body.mode != "demo" and (not body.api_key or not body.secret_key):
             raise HTTPException(422, "API key and secret are required for paper/live accounts")
+        if body.mode != "demo":
+            check_keys(body.mode, body.api_key, body.secret_key, body.data_feed)
         acct = Account(name=body.name, mode=body.mode, api_key=body.api_key.strip(),
                        secret_enc=vault.encrypt(body.secret_key.strip()) if body.secret_key else "",
                        data_feed=body.data_feed)
@@ -166,6 +184,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             acct.secret_enc = vault.encrypt(body.secret_key.strip())
         if acct.mode != "demo" and (not acct.api_key or not acct.secret_enc):
             raise HTTPException(422, "API key and secret are required for paper/live accounts")
+        if acct.mode != "demo":
+            check_keys(acct.mode, acct.api_key, vault.decrypt(acct.secret_enc), acct.data_feed)
         s.commit()
         engine.forget_broker(acct.id)
         return account_out(acct)

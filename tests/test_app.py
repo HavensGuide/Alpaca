@@ -324,3 +324,37 @@ def test_ui_is_served(client):
     r = client.get("/")
     assert r.status_code == 200 and "Alpaca Manager" in r.text
     assert client.get("/static/app.js").status_code == 200
+
+
+def test_auth_errors_are_explained(app, monkeypatch):
+    from alpaca.common.exceptions import APIError
+
+    from alpaca_manager import app as app_module
+    from alpaca_manager.broker import BrokerError, explain_api_error
+
+    resp = SimpleNamespace(status_code=401)
+    exc = APIError("<html><head><title>401 Authorization Required</title></head></html>",
+                   SimpleNamespace(response=resp))
+    msg = explain_api_error(exc, paper=False, feed="iex")
+    assert "rejected" in msg and "live" in msg and "<html>" not in msg
+    resp.status_code = 403
+    assert "SIP" in explain_api_error(APIError('{"message": "forbidden"}', SimpleNamespace(response=resp)),
+                                      paper=True, feed="sip")
+
+    # Saving an account checks the keys; a paper key on a live account gets a pointed hint.
+    class Rejecting:
+        def __init__(self, *a, **k):
+            pass
+
+        def get_account(self):
+            raise BrokerError("Alpaca rejected this account's API keys (401).")
+
+    monkeypatch.setattr(app_module, "AlpacaBroker", Rejecting)
+    app.state.settings.verify_keys = True
+    from fastapi.testclient import TestClient
+
+    with TestClient(app) as c:
+        r = c.post("/api/accounts", json={"name": "L", "mode": "live", "api_key": "PK123456",
+                                          "secret_key": "x"})
+        assert r.status_code == 422 and "PAPER key" in r.text and "401" in r.text
+        assert c.get("/api/accounts").json() == []  # nothing saved

@@ -8,7 +8,7 @@ from alpaca_manager.config import Settings
 @pytest.fixture
 def app(tmp_path, monkeypatch):
     monkeypatch.delenv("ALPACA_MANAGER_KEY", raising=False)
-    return create_app(Settings(data_dir=tmp_path, run_scheduler=False, poll_seconds=1))
+    return create_app(Settings(data_dir=tmp_path, run_scheduler=False, poll_seconds=1, verify_keys=False))
 
 
 @pytest.fixture
