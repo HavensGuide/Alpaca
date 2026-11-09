@@ -32,7 +32,15 @@ INTRADAY = {"1Min", "5Min", "15Min", "30Min", "1Hour"}
 
 
 class BrokerError(Exception):
-    """A broker call failed; the message is safe to show to the user."""
+    """A broker call failed; the message is safe to show to the user.
+
+    ``status`` is the HTTP status from Alpaca when there was one (401, 403, ...),
+    or None for network problems.
+    """
+
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
 
 
 @dataclass
@@ -141,7 +149,10 @@ class AlpacaBroker:
         try:
             return fn(*args, **kwargs)
         except APIError as exc:
-            raise BrokerError(explain_api_error(exc, self._paper, self._feed.value)) from exc
+            status = getattr(exc, "status_code", None)
+            if status is None and "401 Authorization Required" in str(exc):
+                status = 401
+            raise BrokerError(explain_api_error(exc, self._paper, self._feed.value), status) from exc
         except Exception as exc:  # network errors etc.
             raise BrokerError(f"{type(exc).__name__}: {exc}") from exc
 
@@ -330,13 +341,17 @@ def explain_api_error(exc, paper: bool, feed: str) -> str:
     except Exception:  # body is HTML or not JSON
         detail = None
     if status == 401 or (status is None and "401 Authorization Required" in str(exc)):
-        kind = "paper" if paper else "live"
-        other = "live" if paper else "paper"
-        return (f"Alpaca rejected this account's API keys (401). Check that: (1) they are {kind}-trading "
-                f"keys - {kind} keys don't work on a {other} account (paper keys usually start with PK, "
-                f"live keys with AK); (2) they haven't been regenerated or the paper account reset, "
-                f"which invalidates old keys; (3) the key ID and secret aren't swapped. "
-                f"Fix them under Accounts > Edit.")
+        if paper:
+            return ("Alpaca rejected these keys for a PAPER account (401). Make sure: the keys were "
+                    "generated on the Paper Trading dashboard (keys from your live account don't work "
+                    "here); the API Key ID (usually starts with PK, about 20 characters - not your "
+                    "account number) is in the first box and the Secret Key (about 40 characters, shown "
+                    "only once) is in the second; and you haven't regenerated them since.")
+        return ("Alpaca rejected these keys for a LIVE account (401). Make sure: the keys were "
+                "generated on your live account's dashboard (paper keys don't work here); the API Key "
+                "ID (usually starts with AK, about 20 characters - not your account number) is in the "
+                "first box and the Secret Key (about 40 characters, shown only once) is in the second; "
+                "and you haven't regenerated them since.")
     if status == 403:
         hint = (" Your data feed is set to SIP: that needs a market-data subscription linked to these "
                 "keys - switch the account to IEX or check the subscription." if feed == "sip" else "")

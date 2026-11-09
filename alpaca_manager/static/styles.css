@@ -384,3 +384,8 @@ pre.code code { background: none; padding: 0; }
   .mk-title h2, .mk-price { font-size: 1.15rem; }
   .bot-figs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
+
+/* Secret-key field: masked without being a password field, so password managers leave it alone. */
+input.masked { -webkit-text-security: disc; text-security: disc; font-family: ui-monospace, monospace; }
+#am-kid, #am-ksec { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.form-error { white-space: pre-line; }

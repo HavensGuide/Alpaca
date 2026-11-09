@@ -831,9 +831,26 @@ async function loadAccounts() {
   });
 }
 
+function keyShape(mode, value, which) {
+  const v = value.trim();
+  if (!v) return { ok: null, text: "" };
+  const n = `${v.length} characters`;
+  if (which === "key") {
+    if (/^PA/i.test(v) && v.length <= 14) return { ok: false, text: `${n} - this looks like your account number, not an API key ID` };
+    if (v.length < 16) return { ok: false, text: `${n} - API key IDs are about 20 characters` };
+    if (mode === "paper" && /^AK/i.test(v)) return { ok: false, text: `${n}, starts with AK - usually a LIVE key, but the type is Paper` };
+    if (mode === "live" && /^PK/i.test(v)) return { ok: false, text: `${n}, starts with PK - usually a PAPER key, but the type is Live` };
+    return { ok: true, text: `${n}, starts with ${esc(v.slice(0, 2))}` };
+  }
+  if (v.length < 30) return { ok: false, text: `${n} - secrets are about 40 characters. Is this the key ID?` };
+  return { ok: true, text: n };
+}
+
 function accountForm(a = null) {
   const v = a || { name: "", mode: "paper", data_feed: "iex" };
-  const form = el(`<form>
+  // Field names/attributes chosen so browser password managers don't autofill them.
+  const form = el(`<form autocomplete="off">
+    <div class="callout live form-error hidden" role="alert"></div>
     <div class="field"><label>Nickname</label><input name="name" placeholder="e.g. Retirement (paper)" value="${esc(v.name)}"></div>
     <div class="field"><label>Type</label><select name="mode">
       <option value="paper">Paper trading — practice money</option>
@@ -841,31 +858,76 @@ function accountForm(a = null) {
       <option value="demo">Demo — simulated, no keys needed</option></select></div>
     <div class="keys">
       <div class="callout live live-note hidden">Live accounts place real trades with real money. Consider testing your schedules and rules on a paper account first.</div>
-      <div class="field"><label>API key ID</label><input name="api_key" autocomplete="off" spellcheck="false" placeholder="${a?.api_key_masked ? esc(a.api_key_masked) + " (leave blank to keep)" : "PK…"}"></div>
-      <div class="field"><label>Secret key</label><input name="secret_key" type="password" autocomplete="new-password" placeholder="${a?.has_secret ? "•••••• (leave blank to keep)" : ""}"></div>
+      <p class="hint key-where"></p>
+      <div class="field"><label for="am-kid">API Key ID</label>
+        <input id="am-kid" name="am_kid" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
+          placeholder="${a?.api_key_masked ? esc(a.api_key_masked) + " (leave blank to keep)" : "PK…"}">
+        <div class="hint shape" data-for="key"></div></div>
+      <div class="field"><label for="am-ksec">Secret Key</label>
+        <div class="row-gap" style="flex-wrap:nowrap"><input id="am-ksec" name="am_ksec" class="masked" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
+          placeholder="${a?.has_secret ? "•••••• (leave blank to keep)" : "about 40 characters"}"><button type="button" class="btn small" id="am-show">Show</button></div>
+        <div class="hint shape" data-for="secret"></div></div>
+      ${a?.has_secret ? `<p class="hint">To change keys, enter <b>both</b> the new Key ID and its Secret - they only work as a pair.</p>` : ""}
       <div class="field"><label>Market data feed</label><select name="data_feed"><option value="iex">IEX (free)</option><option value="sip">SIP (paid subscription)</option></select>
-        <div class="hint">Free Alpaca plans only include IEX data.</div></div>
+        <div class="hint">IEX works on every plan. Choose SIP only if your market-data subscription covers these keys.</div></div>
     </div>
   </form>`);
-  $('[name="mode"]', form).value = v.mode;
+  const modeSel = $('[name="mode"]', form);
+  modeSel.value = v.mode;
   $('[name="data_feed"]', form).value = v.data_feed;
+  const keyIn = $("#am-kid", form), secIn = $("#am-ksec", form);
+  const showShapes = () => {
+    for (const [inp, which] of [[keyIn, "key"], [secIn, "secret"]]) {
+      const r = keyShape(modeSel.value, inp.value, which);
+      const box = $(`.shape[data-for="${which}"]`, form);
+      box.innerHTML = r.ok === null ? "" : `${r.ok ? "✓" : "⚠"} ${r.text}`;
+      box.classList.toggle("error-text", r.ok === false);
+    }
+  };
   const sync = () => {
-    const mode = $('[name="mode"]', form).value;
+    const mode = modeSel.value;
     $(".keys", form).classList.toggle("hidden", mode === "demo");
     $(".live-note", form).classList.toggle("hidden", mode !== "live");
+    $(".key-where", form).innerHTML = mode === "live"
+      ? "Get these from your <b>live</b> account's Alpaca dashboard → API Keys."
+      : "Get these from the Alpaca dashboard with <b>Paper Trading</b> selected → API Keys → Generate. Copy the Secret right away - it's only shown once.";
+    showShapes();
   };
-  $('[name="mode"]', form).onchange = sync;
+  modeSel.onchange = sync;
+  keyIn.addEventListener("input", showShapes);
+  secIn.addEventListener("input", showShapes);
+  $("#am-show", form).onclick = (e) => {
+    const hidden = secIn.classList.toggle("masked");
+    e.currentTarget.textContent = hidden ? "Show" : "Hide";
+  };
   sync();
-  const save = button(a ? "Save" : "Add account", "primary", (b) => guard(async () => {
-    const f = Object.fromEntries(new FormData(form));
-    if (!f.name.trim()) throw new Error("Give the account a nickname");
-    const res = await api(a ? "PUT" : "POST", a ? `/api/accounts/${a.id}` : "/api/accounts", f);
-    modal.close();
-    toast(a ? "Account updated" : "Account added");
-    state.accountId = res.id;
-    try { localStorage.setItem("am-account", res.id); } catch { /* ignore */ }
-    loadAccounts();
-  }, b));
+  const errBox = $(".form-error", form);
+  const save = button(a ? "Save" : "Add account", "primary", async (b) => {
+    errBox.classList.add("hidden");
+    const f = new FormData(form);
+    const body = { name: String(f.get("name") || "").trim(), mode: modeSel.value,
+      api_key: keyIn.value.trim(), secret_key: secIn.value.trim(), data_feed: f.get("data_feed") };
+    if (!body.name) { errBox.textContent = "Give the account a nickname."; errBox.classList.remove("hidden"); return; }
+    b.disabled = true;
+    const label = b.textContent;
+    if (body.mode !== "demo" && (body.api_key || body.secret_key)) b.textContent = "Checking keys with Alpaca…";
+    try {
+      const res = await api(a ? "PUT" : "POST", a ? `/api/accounts/${a.id}` : "/api/accounts", body);
+      modal.close();
+      if (res.warning) toast(res.warning, true);
+      else toast(a ? "Account updated" : body.mode === "demo" ? "Account added" : "Keys accepted by Alpaca - account saved");
+      state.accountId = res.id;
+      try { localStorage.setItem("am-account", res.id); } catch { /* ignore */ }
+      loadAccounts();
+    } catch (e) {
+      errBox.textContent = e.message;
+      errBox.classList.remove("hidden");
+      errBox.scrollIntoView({ block: "nearest" });
+    } finally {
+      b.disabled = false;
+      b.textContent = label;
+    }
+  });
   modal.open({ title: a ? "Edit account" : "Add account", body: form, foot: [button("Cancel", "", modal.close), save], small: true });
 }
 $("#new-account").onclick = () => accountForm();

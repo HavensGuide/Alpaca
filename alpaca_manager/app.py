@@ -140,28 +140,49 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def list_accounts(s: Session = Depends(db)):
         return [account_out(a) for a in s.scalars(select(Account).order_by(Account.id))]
 
-    def check_keys(mode: str, api_key: str, secret: str, data_feed: str) -> None:
-        """Try the keys against Alpaca so bad keys are caught on the Accounts screen."""
+    def key_shape_hints(mode: str, api_key: str, secret: str) -> str:
+        """Spot common copy/paste mix-ups (only shown when Alpaca has rejected the keys)."""
+        key, sec = api_key.strip(), secret.strip()
+        hints = []
+        if key.upper().startswith("PA") and len(key) <= 14:
+            hints.append(f"The key ID you entered ({key[:3]}...) looks like your paper ACCOUNT NUMBER, "
+                         "not an API key ID.")
+        elif len(key) < 16:
+            hints.append(f"The key ID is only {len(key)} characters - API key IDs are about 20.")
+        if len(sec) < 30:
+            hints.append(f"The secret is only {len(sec)} characters - secrets are about 40. "
+                         "It may be the key ID pasted into the wrong box.")
+        if mode == "live" and key.upper().startswith("PK"):
+            hints.append("The key ID starts with PK, which is usually a PAPER key, but the type is Live.")
+        if mode == "paper" and key.upper().startswith("AK"):
+            hints.append("The key ID starts with AK, which is usually a LIVE key, but the type is Paper.")
+        return " ".join(hints)
+
+    def check_keys(mode: str, api_key: str, secret: str, data_feed: str) -> str | None:
+        """Try the keys against Alpaca so bad keys are caught on the Accounts screen.
+
+        Blocks the save only when Alpaca definitely rejects the keys (401/403). If Alpaca
+        can't be reached, the keys are saved anyway and a warning is returned.
+        """
         if not settings.verify_keys:
-            return
+            return None
         try:
             AlpacaBroker(api_key.strip(), secret.strip(), paper=mode == "paper",
                          data_feed=data_feed).get_account()
         except BrokerError as exc:
-            key = api_key.strip().upper()
-            hint = ""
-            if mode == "live" and key.startswith("PK"):
-                hint = "This looks like a PAPER key (starts with PK) but the account type is Live. "
-            elif mode == "paper" and key.startswith("AK"):
-                hint = "This looks like a LIVE key (starts with AK) but the account type is Paper. "
-            raise HTTPException(422, hint + str(exc)) from exc
+            if exc.status in (401, 403):
+                hints = key_shape_hints(mode, api_key, secret)
+                raise HTTPException(422, (hints + " " if hints else "") + str(exc)) from exc
+            return f"Saved, but the keys couldn't be tested right now ({exc})."
+        return None
 
     @app.post("/api/accounts", status_code=201)
     def create_account(body: AccountIn, s: Session = Depends(db)):
         if body.mode != "demo" and (not body.api_key or not body.secret_key):
             raise HTTPException(422, "API key and secret are required for paper/live accounts")
+        warning = None
         if body.mode != "demo":
-            check_keys(body.mode, body.api_key, body.secret_key, body.data_feed)
+            warning = check_keys(body.mode, body.api_key, body.secret_key, body.data_feed)
         acct = Account(name=body.name, mode=body.mode, api_key=body.api_key.strip(),
                        secret_enc=vault.encrypt(body.secret_key.strip()) if body.secret_key else "",
                        data_feed=body.data_feed)
@@ -169,7 +190,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         s.commit()
         engine.record(f"Account '{acct.name}' added ({acct.mode})", account_id=acct.id,
                       source="Accounts")
-        return account_out(acct)
+        return dict(account_out(acct), warning=warning)
 
     @app.put("/api/accounts/{account_id}")
     def update_account(account_id: int, body: AccountIn, s: Session = Depends(db)):
@@ -183,6 +204,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if {body.mode, acct.mode} == {"paper", "live"} and not (new_key and body.secret_key):
             raise HTTPException(422, "Paper and live accounts use different API keys - enter both the "
                                      f"key ID and secret for your {body.mode} account.")
+        # Only re-test with Alpaca when the keys or the account type change, so an account
+        # can always be renamed or have its data feed changed.
+        keys_changed = bool(body.secret_key) or (new_key and new_key != acct.api_key) or body.mode != acct.mode
         acct.name = body.name
         acct.data_feed = body.data_feed
         if body.mode != acct.mode:
@@ -193,11 +217,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             acct.secret_enc = vault.encrypt(body.secret_key.strip())
         if acct.mode != "demo" and (not acct.api_key or not acct.secret_enc):
             raise HTTPException(422, "API key and secret are required for paper/live accounts")
-        if acct.mode != "demo":
-            check_keys(acct.mode, acct.api_key, vault.decrypt(acct.secret_enc), acct.data_feed)
+        warning = None
+        if acct.mode != "demo" and keys_changed:
+            warning = check_keys(acct.mode, acct.api_key, vault.decrypt(acct.secret_enc), acct.data_feed)
         s.commit()
         engine.forget_broker(acct.id)
-        return account_out(acct)
+        return dict(account_out(acct), warning=warning)
 
     @app.delete("/api/accounts/{account_id}", status_code=204)
     def delete_account(account_id: int, s: Session = Depends(db)):

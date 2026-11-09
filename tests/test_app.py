@@ -347,7 +347,7 @@ def test_auth_errors_are_explained(app, monkeypatch):
             pass
 
         def get_account(self):
-            raise BrokerError("Alpaca rejected this account's API keys (401).")
+            raise BrokerError("Alpaca rejected these keys (401).", status=401)
 
     monkeypatch.setattr(app_module, "AlpacaBroker", Rejecting)
     app.state.settings.verify_keys = True
@@ -358,6 +358,30 @@ def test_auth_errors_are_explained(app, monkeypatch):
                                           "secret_key": "x"})
         assert r.status_code == 422 and "PAPER key" in r.text and "401" in r.text
         assert c.get("/api/accounts").json() == []  # nothing saved
+        # The exact mix-up seen in the wild: account number as key ID, key ID as secret.
+        r = c.post("/api/accounts", json={"name": "P", "mode": "paper", "api_key": "PA3YABCDEF8Q",
+                                          "secret_key": "PKABCDEFGHIJKLMNOPQR"})
+        assert "ACCOUNT NUMBER" in r.text and "only 20 characters" in r.text
+
+        # If Alpaca can't be reached at all, save anyway and warn.
+        class Offline(Rejecting):
+            def get_account(self):
+                raise BrokerError("ConnectionError: no route")
+
+        monkeypatch.setattr(app_module, "AlpacaBroker", Offline)
+        r = c.post("/api/accounts", json={"name": "P", "mode": "paper", "api_key": "PK" + "A" * 18,
+                                          "secret_key": "s" * 40})
+        assert r.status_code == 201 and "couldn't be tested" in r.json()["warning"]
+        acct_id = r.json()["id"]
+
+        # Renaming / changing the feed never re-tests (or blocks on) the stored keys.
+        monkeypatch.setattr(app_module, "AlpacaBroker", Rejecting)
+        r = c.put(f"/api/accounts/{acct_id}", json={"name": "Renamed", "mode": "paper", "data_feed": "sip"})
+        assert r.status_code == 200 and r.json()["name"] == "Renamed"
+        # ...but new keys are tested.
+        r = c.put(f"/api/accounts/{acct_id}", json={"name": "R", "mode": "paper", "api_key": "PK" + "B" * 18,
+                                                     "secret_key": "t" * 40})
+        assert r.status_code == 422 and "401" in r.text
 
 
 def test_editing_keys_requires_matching_pair(client, engine):
