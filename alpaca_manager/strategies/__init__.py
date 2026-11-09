@@ -2,5 +2,7 @@
 
 from .. import indicators
 from .base import Context, Param, Strategy
+from .ml import ModelStrategy, RidgeModel, default_features
 
-__all__ = ["Context", "Param", "Strategy", "indicators"]
+__all__ = ["Context", "ModelStrategy", "Param", "RidgeModel", "Strategy", "default_features",
+           "indicators"]

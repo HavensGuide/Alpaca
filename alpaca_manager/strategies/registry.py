@@ -86,7 +86,7 @@ class Registry:
         self.plugin_dir.mkdir(parents=True, exist_ok=True)
         example = self.plugin_dir / "example_strategy.py.txt"
         if not example.exists():
-            example.write_text(PLUGIN_TEMPLATE)
+            example.write_text(PLUGIN_TEMPLATE, encoding="utf-8")
         for path in sorted(self.plugin_dir.glob("*.py")):
             mod_name = f"alpaca_manager_plugin_{path.stem}"
             try:

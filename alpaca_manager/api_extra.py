@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta, timezone
+from pathlib import Path
 from typing import Literal
 
 import pandas as pd
@@ -287,6 +288,31 @@ def register(app: FastAPI, *, engine, db, get_account, broker_call, local_iso,
     @app.get("/api/strategies/template")
     def strategy_template():
         return {"filename": "my_strategy.py", "code": PLUGIN_TEMPLATE}
+
+    examples_dir = Path(__file__).parent / "plugin_examples"
+
+    def example_info(path: Path) -> dict:
+        doc = path.read_text(encoding="utf-8").split('"""')
+        lines = doc[1].strip().splitlines() if len(doc) > 2 else [path.stem]
+        return {"file": path.name, "title": lines[0].removeprefix("Example plugin: ").rstrip("."),
+                "details": " ".join(x.strip() for x in lines[1:4] if x.strip()),
+                "installed": (registry.plugin_dir / path.name).exists()}
+
+    @app.get("/api/strategies/examples")
+    def list_examples():
+        return [example_info(p) for p in sorted(examples_dir.glob("*.py"))]
+
+    @app.post("/api/strategies/examples/{name}")
+    def install_example(name: str):
+        src = examples_dir / name
+        if src.parent != examples_dir or src.suffix != ".py" or not src.exists():
+            raise HTTPException(404, "No such example")
+        dest = registry.plugin_dir / name
+        if dest.exists():
+            raise HTTPException(409, f"{name} is already in your plugins folder - edit or delete it there")
+        dest.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        registry.reload()
+        return dict(registry.describe(), installed=str(dest))
 
     def build_strategy(key: str, params: dict):
         try:

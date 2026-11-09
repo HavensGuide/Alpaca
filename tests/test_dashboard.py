@@ -107,7 +107,7 @@ def test_buy_and_hold_matches_price_change_and_benchmark():
 @pytest.mark.parametrize("cls", BUILTIN)
 def test_every_builtin_strategy_runs(cls):
     rng = np.random.default_rng(1)
-    frames = {s: frame(100 * np.exp(np.cumsum(rng.normal(0, 0.02, 300)))) for s in ("A", "B", "C")}
+    frames = {s: frame(100 * np.exp(np.cumsum(rng.normal(0, 0.02, 800)))) for s in ("A", "B", "C")}
     res = run_backtest(cls(), frames, BacktestSettings(start=pd.Timestamp("2023-01-01", tz="UTC")))
     assert res["bars"] > 0 and res["final_equity"] > 0
 

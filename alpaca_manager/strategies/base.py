@@ -187,6 +187,17 @@ class Context:
         """Close prices of every symbol as one DataFrame (columns = symbols)."""
         return pd.DataFrame({s: self.history(s, bars)["close"] for s in self.symbols})
 
+    def bars_since(self, when) -> int:
+        """Bars that have closed after ``when`` (a timestamp or ISO string), up to now.
+
+        Use this rather than comparing ``bar_index`` values saved in ``state``: a live
+        bot sees a different window of history on every run, so indexes shift.
+        """
+        ts = pd.Timestamp(when)
+        if ts.tzinfo is None:
+            ts = ts.tz_localize("UTC")
+        return int(self.bar_index - self._index.searchsorted(ts, side="right") + 1)
+
     def close(self, symbol: str) -> float:
         return self._prices[symbol]
 

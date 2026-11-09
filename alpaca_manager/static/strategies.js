@@ -42,6 +42,16 @@ function strategyPicker(selectedKey, values = {}) {
   return wrap;
 }
 
+/* Refresh every open strategy dropdown after plugins change, keeping the selection. */
+function refreshStrategyOptions() {
+  $$("select.st-key").forEach((sel) => {
+    const cur = sel.value;
+    sel.innerHTML = stInfo.strategies.map((s) => `<option value="${esc(s.key)}">${esc(s.name)}${s.source !== "built-in" ? " (plugin)" : ""}</option>`).join("");
+    if (stInfo.strategies.some((s) => s.key === cur)) sel.value = cur;
+    else sel.dispatchEvent(new Event("change"));
+  });
+}
+
 const parseSymbols = (v) => [...new Set(String(v).toUpperCase().split(/[\s,;]+/).filter(Boolean))];
 
 /* ---------------- backtest form ---------------- */
@@ -293,7 +303,10 @@ $("#new-bot").onclick = () => botForm();
 
 /* ---------------- plugins ---------------- */
 async function renderPlugins() {
-  const tpl = await api("GET", "/api/strategies/template").catch(() => ({ code: "" }));
+  const [tpl, examples] = await Promise.all([
+    api("GET", "/api/strategies/template").catch(() => ({ code: "" })),
+    api("GET", "/api/strategies/examples").catch(() => []),
+  ]);
   const box = $("#st-plugins");
   box.innerHTML = `
     <div class="card">
@@ -304,17 +317,34 @@ async function renderPlugins() {
           <td style="white-space:normal">${Object.entries(s.params).map(([k, p]) => `<code>${esc(k)}</code>=${esc(p.default)}`).join(", ") || "—"}</td></tr>`).join("")}</tbody></table></div>
     </div>
     <div class="card">
+      <div class="card-head"><h2>Example models</h2></div>
+      <p class="muted">Machine-learning strategies built on <code>ModelStrategy</code>: they retrain walk-forward on past data only, so backtests don't peek at the future.
+        Add one to your plugins folder, then edit the copy to make it your own. The built-in <b>ML: ridge forecast</b> needs no extra packages.</p>
+      <div class="table-wrap"><table><tbody>${examples.map((x) => `<tr><td style="white-space:normal"><b>${esc(x.title)}</b><div class="hint" style="white-space:normal">${esc(x.details)}</div></td>
+        <td class="r"><code>${esc(x.file)}</code></td>
+        <td class="r">${x.installed ? '<span class="status active">In your plugins</span>' : `<button class="btn small primary" data-install="${esc(x.file)}">Add to my plugins</button>`}</td></tr>`).join("") || '<tr><td class="muted">No examples found.</td></tr>'}</tbody></table></div>
+    </div>
+    <div class="card">
       <h2>Write your own</h2>
       <ol class="steps">
         <li>Create a <code>.py</code> file in your plugins folder:<br><code class="path">${esc(stInfo.plugin_dir)}</code></li>
-        <li>Define a class that extends <code>Strategy</code> and returns target weights from <code>on_bar</code> (template below).</li>
+        <li>Rule-based: extend <code>Strategy</code> and return target weights from <code>on_bar</code> (template below).<br>
+          Model-based: extend <code>ModelStrategy</code> and return your model from <code>make_model()</code> - anything with <code>fit(X, y)</code> and <code>predict(X)</code> (scikit-learn, a PyTorch wrapper, XGBoost...). Optionally override <code>features(df)</code>. See the example models above.</li>
         <li>Press <b>Reload plugins</b>. It appears in the Backtest and Bot strategy lists.</li>
       </ol>
       <p class="muted">Plugins are ordinary Python running on your computer. Only add code you trust. Packages can also register strategies with an <code>alpaca_manager.strategies</code> entry point.</p>
       <div class="code-head"><b>my_strategy.py</b><button class="btn small" id="pl-copy">Copy</button></div>
       <pre class="code"><code>${esc(tpl.code)}</code></pre>
     </div>`;
-  $("#pl-reload").onclick = (e) => guard(async () => { stInfo = await api("POST", "/api/strategies/reload"); renderPlugins(); toast(`${stInfo.strategies.length} strategies loaded${stInfo.errors.length ? `, ${stInfo.errors.length} error(s)` : ""}`, stInfo.errors.length > 0); }, e.currentTarget);
+  $("#pl-reload").onclick = (e) => guard(async () => { stInfo = await api("POST", "/api/strategies/reload"); refreshStrategyOptions(); renderPlugins(); toast(`${stInfo.strategies.length} strategies loaded${stInfo.errors.length ? `, ${stInfo.errors.length} error(s)` : ""}`, stInfo.errors.length > 0); }, e.currentTarget);
+  $$("[data-install]", box).forEach((b) => (b.onclick = () => guard(async () => {
+    const r = await api("POST", `/api/strategies/examples/${encodeURIComponent(b.dataset.install)}`);
+    stInfo = r;
+    refreshStrategyOptions();
+    toast(`Added ${b.dataset.install} - it's now in the strategy lists`);
+    if (r.errors.length) toast(r.errors.map((e) => `${e.source}: ${e.error}`).join("; "), true);
+    renderPlugins();
+  }, b)));
   $("#pl-copy").onclick = async () => { try { await navigator.clipboard.writeText(tpl.code); toast("Copied"); } catch { toast("Copy failed - select the text instead", true); } };
 }
 
@@ -335,6 +365,7 @@ TABS.strategies = {
   async load() {
     await loadStrategies();
     if (!stLoaded) { renderBacktestForm(); loadBacktestHistory(); stLoaded = true; }
+    else refreshStrategyOptions();
     setStView(stView);
   },
   refresh: () => { if (stView === "bots") loadBots(); },

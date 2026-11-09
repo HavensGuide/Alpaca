@@ -29,7 +29,7 @@ alpaca-manager = "alpaca_manager.cli:main"
 include = ["alpaca_manager*"]
 
 [tool.setuptools.package-data]
-alpaca_manager = ["static/*", "static/vendor/*"]
+alpaca_manager = ["static/*", "static/vendor/*", "plugin_examples/*.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -99,9 +99,9 @@ class MomentumRotation(Strategy):
 
     def on_bar(self, ctx):
         last = ctx.state.get("last_rebalance")
-        if last is not None and ctx.bar_index - last < self.p["rebalance_every"]:
+        if last is not None and ctx.bars_since(last) < self.p["rebalance_every"]:
             return None
-        ctx.state["last_rebalance"] = ctx.bar_index
+        ctx.state["last_rebalance"] = str(ctx.time)
         closes = ctx.closes(self.p["lookback"] + 1)
         mom = (closes.iloc[-1] / closes.iloc[0] - 1).dropna().sort_values(ascending=False)
         if self.p["require_positive"]:
@@ -142,4 +142,7 @@ class BollingerReversion(Strategy):
         return out
 
 
-BUILTIN = [BuyAndHold, SmaCrossover, RsiMeanReversion, MomentumRotation, BollingerReversion]
+from .ml import RidgeForecast  # noqa: E402  (imported here to avoid a cycle)
+
+BUILTIN = [BuyAndHold, SmaCrossover, RsiMeanReversion, MomentumRotation, BollingerReversion,
+           RidgeForecast]
