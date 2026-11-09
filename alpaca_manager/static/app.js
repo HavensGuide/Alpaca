@@ -169,6 +169,10 @@ function legsEditor(initial = [], { withQuotes = true } = {}) {
       ot.disabled = all || dollars;
       tif.disabled = all || dollars;
       $(".f-limit", row).disabled = ot.value !== "limit";
+      // Say why the limit box is locked.
+      $(".f-limit", row).placeholder = dollars ? "Shares only" : ot.value === "limit" ? "0.00" : "Limit only";
+      const why = dollars ? "Dollar orders are market orders. Switch 'Amount in' to Shares to set a limit price." : "";
+      ot.title = why; $(".f-limit", row).title = why || (ot.value !== "limit" ? "Set Order type to Limit to enter a price" : "");
       $(".f-amount", row).placeholder = dollars ? "$500" : all ? "all" : "10";
     }
     seg.onclick = (e) => { if (e.target.dataset.v) { side = e.target.dataset.v; sync(); } };
@@ -280,7 +284,7 @@ async function loadOverview({ light = false } = {}) {
   if (none) { $("#market-pill").textContent = "—"; return; }
   try {
     const data = await api("GET", `/api/accounts/${state.accountId}/overview`);
-    renderStats(data.account);
+    renderStats(data.account, data.positions);
     renderPositions(data.positions);
     renderClock(data.clock);
     if (!light) {
@@ -301,15 +305,22 @@ function renderClock(c) {
   p.textContent = c.is_open ? `Market open · closes ${fmtTime(c.next_close, { month: undefined, day: undefined })}` : `Market closed · opens ${fmtTime(c.next_open, { weekday: "short", month: undefined, day: undefined })}`;
 }
 
-function renderStats(a) {
-  const change = a.equity - a.last_equity;
-  const changePct = a.last_equity ? change / a.last_equity : 0;
+function renderStats(a, positions = []) {
   const stat = (label, value, sub = "") => `<div class="stat"><div class="label">${label}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
+  const arrow = (v, extra) => `<span class="${signClass(v)}">${v >= 0 ? "▲" : "▼"} ${money(Math.abs(v))}${extra}</span>`;
+  // Your stocks only - no cash.
+  const mv = positions.reduce((t, p) => t + (p.market_value || 0), 0);
+  const cost = positions.reduce((t, p) => t + (p.cost_basis || 0), 0);
+  const gain = mv - cost;
+  const today = positions.reduce((t, p) => t + (p.change_today != null ? p.market_value * p.change_today / (1 + p.change_today) : 0), 0);
+  const prevMv = mv - today;
+  const acctChange = a.equity - a.last_equity;
   $("#stats").innerHTML =
-    stat("Portfolio value", money(a.equity), `<span class="${signClass(change)}">${change >= 0 ? "▲" : "▼"} ${money(Math.abs(change))} (${pct(changePct)}) today</span>`) +
-    stat("Cash", money(a.cash)) +
-    stat("Buying power", money(a.buying_power)) +
-    stat("Invested", money(a.long_market_value), a.trading_blocked ? `<span class="down">Trading blocked</span>` : `<span class="muted">${esc(a.status)}</span>`);
+    stat("My stocks", money(mv), positions.length ? `${arrow(today, ` (${pct(prevMv ? today / prevMv : 0)})`)} today` : `<span class="muted">No positions</span>`) +
+    stat("Total gain on stocks", positions.length ? `<span class="${signClass(gain)}">${gain >= 0 ? "+" : "-"}${money(Math.abs(gain))}</span>` : "—",
+      positions.length ? `<span class="${signClass(gain)}">${pct(cost ? gain / cost : 0)}</span> <span class="muted">on ${money(cost)} invested</span>` : "") +
+    stat("Account value", money(a.equity), `${arrow(acctChange, "")} today <span class="muted">· stocks + cash</span>`) +
+    stat("Cash", money(a.cash), a.trading_blocked ? `<span class="down">Trading blocked</span>` : `<span class="muted">Buying power ${money(a.buying_power)}</span>`);
 }
 
 function renderPositions(positions) {
@@ -385,20 +396,62 @@ $("#refresh-overview").onclick = () => loadOverview();
 /* Dashboard: portfolio value chart + news for holdings */
 state.dashPeriod = "1M";
 let dashChart = null;
+state.dashView = (() => { try { return localStorage.getItem("am-dash-view") || "stocks"; } catch { return "stocks"; } })();
+const DASH_TITLES = { stocks: "My stocks", each: "Each stock I hold", account: "Whole account (stocks + cash)" };
+const PERIOD_WORDS = { "1D": "the day", "1W": "the week", "1M": "the month", "3M": "3 months", "1Y": "the year", ALL: "all time" };
+
 async function loadDashEquity() {
   const host = $("#dash-equity");
+  const view = state.dashView;
+  $$("#dash-view button").forEach((x) => x.classList.toggle("active", x.dataset.v === view));
+  $("#dash-title").textContent = DASH_TITLES[view];
+  const note = $("#dash-note");
+  note.textContent = view === "account" ? "Includes cash, deposits and withdrawals."
+    : "Today's shares valued over the period - cash and past sales left out.";
   try {
-    const h = await api("GET", `/api/accounts/${state.accountId}/history?period=${state.dashPeriod}&benchmark=`);
+    const intraday = ["1D", "1W"].includes(state.dashPeriod);
+    let points, members = null;
+    if (view === "account") {
+      const h = await api("GET", `/api/accounts/${state.accountId}/history?period=${state.dashPeriod}&benchmark=`);
+      points = h.points.map((p) => ({ t: p.t, v: p.equity }));
+    } else {
+      const h = await api("GET", `/api/accounts/${state.accountId}/holdings-history?period=${state.dashPeriod}`);
+      points = h.points;
+      members = h.members;
+    }
     if (dashChart) { dashChart.destroy(); dashChart = null; }
-    if (h.points.length < 2) { host.innerHTML = `<div class="empty-inline">Not enough history yet for this period.</div>`; $("#dash-equity-change").textContent = ""; return; }
-    dashChart = makeChart(host, { height: 220, intraday: ["1D", "1W"].includes(state.dashPeriod) });
-    dashChart.addArea("Portfolio value", h.points.map((p) => ({ t: p.t, v: p.equity })), { color: seriesColor(0) });
+    if (!points || points.length < 2) {
+      host.innerHTML = `<div class="empty-inline">${view !== "account" && !Object.keys(members || {}).length ? "You don't hold any stocks yet." : "Not enough history yet for this period."}</div>`;
+      $("#dash-equity-change").textContent = "";
+      return;
+    }
+    const first = points[0].v, last = points[points.length - 1].v;
+    if (view === "each") {
+      dashChart = makeChart(host, { height: 240, intraday, percent: true });
+      const syms = Object.keys(members);
+      syms.forEach((sym, i) => {
+        const pts = members[sym];
+        const base = pts[0]?.v;
+        dashChart.addLine(sym, pts.map((p) => ({ t: p.t, v: (p.v / base - 1) * 100 })),
+          i < 6 ? { slot: i } : { color: cssVar("--muted"), width: 1, legend: false });
+      });
+      dashChart.addLine("All my stocks", points.map((p) => ({ t: p.t, v: (p.v / first - 1) * 100 })), { color: cssVar("--text"), dashed: true });
+    } else {
+      dashChart = makeChart(host, { height: 240, intraday });
+      dashChart.addArea(DASH_TITLES[view], points, { color: seriesColor(0) });
+    }
     dashChart.fit();
     dashChart.renderLegend();
-    const first = h.points[0].equity, last = h.points[h.points.length - 1].equity;
-    $("#dash-equity-change").innerHTML = `${signed(last / first - 1)} <span class="muted">over ${{ "1D": "the day", "1W": "the week", "1M": "the month", "3M": "3 months", "1Y": "the year", ALL: "all time" }[state.dashPeriod]}</span>`;
+    $("#dash-equity-change").innerHTML = `${signed(last / first - 1)} <span class="muted">(${last - first >= 0 ? "+" : "-"}${money(Math.abs(last - first))}) over ${PERIOD_WORDS[state.dashPeriod]}</span>`;
   } catch (e) { host.innerHTML = `<div class="empty-inline error-text">${esc(e.message)}</div>`; }
 }
+$("#dash-view").onclick = (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  state.dashView = b.dataset.v;
+  try { localStorage.setItem("am-dash-view", state.dashView); } catch { /* ignore */ }
+  loadDashEquity();
+};
 $("#dash-period").onclick = (e) => {
   const b = e.target.closest("button");
   if (!b) return;

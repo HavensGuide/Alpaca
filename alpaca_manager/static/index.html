@@ -49,10 +49,14 @@
         <div class="dash-grid">
           <div class="card">
             <div class="card-head">
-              <div><h2>Portfolio value</h2><div class="sub-line" id="dash-equity-change"></div></div>
+              <div><h2 id="dash-title">My stocks</h2><div class="sub-line" id="dash-equity-change"></div></div>
               <div class="seg" id="dash-period">
                 <button data-p="1D">1D</button><button data-p="1W">1W</button><button class="active" data-p="1M">1M</button><button data-p="3M">3M</button><button data-p="1Y">1Y</button><button data-p="ALL">All</button>
               </div>
+            </div>
+            <div class="dash-tools">
+              <div class="seg small-seg" id="dash-view"><button data-v="stocks">My stocks</button><button data-v="each">Each stock</button><button data-v="account">Whole account</button></div>
+              <span class="muted small" id="dash-note"></span>
             </div>
             <div id="dash-equity"></div>
             <div class="card-foot"><a href="#" data-goto="performance">Full performance report →</a></div>

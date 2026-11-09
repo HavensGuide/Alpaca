@@ -326,3 +326,15 @@ def test_series_endpoint_returns_correlation(client, demo):
     # Without the parameter, nothing extra is computed.
     r = client.post("/api/market/series", json={"account_id": acct_id, "range": "1Y", "items": items})
     assert r.json()["correlation"] is None
+
+
+def test_holdings_history_excludes_cash(client, demo):
+    acct_id, broker = demo
+    h = client.get(f"/api/accounts/{acct_id}/holdings-history?period=1M").json()
+    assert set(h["members"]) == {"AAPL", "MSFT", "SPY"} and len(h["points"]) > 10
+    # Latest point = current shares x latest close, nowhere near cash + stocks.
+    last = h["points"][-1]["v"]
+    expected = sum(p["qty"] * h["members"][s][-1]["v"] for s, p in broker.positions.items())
+    assert last == pytest.approx(expected, rel=1e-6)
+    assert last < broker.cash  # demo holds far more cash than stock
+    assert client.get(f"/api/accounts/{acct_id}/holdings-history?period=9Y").status_code == 422

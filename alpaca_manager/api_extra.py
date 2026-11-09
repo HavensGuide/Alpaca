@@ -17,7 +17,7 @@ from .backtest import BacktestSettings, run_backtest
 from .bots import BOT_TIMEFRAMES, BotRunner
 from .broker import NY, BrokerError, HISTORY_PERIODS
 from .db import Account, BacktestRun, Basket, BotSnapshot, Setting, StrategyBot, as_utc
-from .marketdata import MarketData, estimate_bars, warmup_days
+from .marketdata import MarketData, estimate_bars, last_sessions, warmup_days
 from .schemas import _symbol
 from .strategies.registry import PLUGIN_TEMPLATE, Registry
 
@@ -257,6 +257,30 @@ def register(app: FastAPI, *, engine, db, get_account, broker_call, local_iso,
             except (BrokerError, ValueError, KeyError):
                 pass  # benchmark is optional
         return out
+
+    @app.get("/api/accounts/{account_id}/holdings-history")
+    def holdings_history(account_id: int, period: str = "1M", s: Session = Depends(db)):
+        """Value over time of the shares held NOW (cash, deposits and past sales excluded)."""
+        if period not in HISTORY_PERIODS:
+            raise HTTPException(422, f"period must be one of {', '.join(HISTORY_PERIODS)}")
+        acct, broker = broker_of(s, account_id)
+        positions = broker_call(broker.get_positions)
+        qty = {p["symbol"]: float(p["qty"]) for p in positions if p.get("qty")}
+        if not qty:
+            return {"period": period, "points": [], "members": {}}
+        _, _, tf, days = HISTORY_PERIODS[period]
+        start = datetime.now(timezone.utc) - timedelta(days=days + (4 if period == "1D" else 0))
+        frames = broker_call(market.bars, acct.id, broker, sorted(qty), tf, start)
+        closes = pd.DataFrame({sym: f["close"] for sym, f in frames.items() if not f.empty}).ffill().dropna()
+        if period == "1D" and not closes.empty:
+            cut = last_sessions(closes.index, 1)
+            closes = closes[closes.index >= cut]
+        if closes.empty:
+            return {"period": period, "points": [], "members": {}}
+        value = sum(closes[sym] * q for sym, q in qty.items() if sym in closes)
+        return {"period": period, "points": analytics.to_points(value, 2),
+                "members": {sym: analytics.to_points(closes[sym], 4) for sym in closes.columns},
+                "missing": sorted(set(qty) - set(closes.columns))}
 
     @app.get("/api/accounts/{account_id}/trades")
     def trade_performance(account_id: int, s: Session = Depends(db)):
