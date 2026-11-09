@@ -119,6 +119,98 @@ class ActivityLog(Base):
     message: Mapped[str] = mapped_column(Text)
 
 
+class Setting(Base):
+    """Small key/value store (e.g. the watchlist)."""
+
+    __tablename__ = "settings"
+
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[dict | list | str | None] = mapped_column(JSON, nullable=True)
+
+
+class Basket(Base):
+    """A named group of stocks, charted as one value: sum(qty * price)."""
+
+    __tablename__ = "baskets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100))
+    items: Mapped[list[dict]] = mapped_column(JSON, default=list)  # [{"symbol", "qty"}]
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class BacktestRun(Base):
+    __tablename__ = "backtests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    strategy_key: Mapped[str] = mapped_column(String(100))
+    strategy_name: Mapped[str] = mapped_column(String(200))
+    params: Mapped[dict] = mapped_column(JSON, default=dict)
+    symbols: Mapped[list[str]] = mapped_column(JSON, default=list)
+    settings: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Summary metrics, kept small for the history list.
+    summary: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Full result (equity curve, trades, ...).
+    result: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class StrategyBot(Base):
+    """A strategy plugin paper-trading an account with its own money allocation."""
+
+    __tablename__ = "bots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"))
+    name: Mapped[str] = mapped_column(String(200))
+    strategy_key: Mapped[str] = mapped_column(String(100))
+    params: Mapped[dict] = mapped_column(JSON, default=dict)
+    symbols: Mapped[list[str]] = mapped_column(JSON, default=list)
+    timeframe: Mapped[str] = mapped_column(String(10), default="1Day")
+    run_time: Mapped[str] = mapped_column(String(5), default="15:45")  # daily bots, NY time
+    benchmark: Mapped[str] = mapped_column(String(10), default="SPY")
+    allocation: Mapped[float] = mapped_column(Float)
+    # The bot's own ledger, separate from anything else in the account.
+    cash: Mapped[float] = mapped_column(Float)
+    positions: Mapped[dict] = mapped_column(JSON, default=dict)  # symbol -> shares
+    state: Mapped[dict] = mapped_column(JSON, default=dict)  # strategy's ctx.state
+    benchmark_start: Mapped[float | None] = mapped_column(Float, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="active")  # active | paused
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    snapshots: Mapped[list["BotSnapshot"]] = relationship(cascade="all, delete-orphan",
+                                                          order_by="BotSnapshot.id")
+    trades: Mapped[list["BotTrade"]] = relationship(cascade="all, delete-orphan",
+                                                    order_by="BotTrade.id")
+
+
+class BotSnapshot(Base):
+    __tablename__ = "bot_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"), index=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    equity: Mapped[float] = mapped_column(Float)
+    benchmark: Mapped[float | None] = mapped_column(Float, nullable=True)  # benchmark price
+
+
+class BotTrade(Base):
+    __tablename__ = "bot_trades"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"), index=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    symbol: Mapped[str] = mapped_column(String(20))
+    side: Mapped[str] = mapped_column(String(4))
+    qty: Mapped[float] = mapped_column(Float)
+    price: Mapped[float] = mapped_column(Float)
+    # True when the broker hadn't reported a fill price yet and the last trade price was used.
+    estimated: Mapped[bool] = mapped_column(Boolean, default=False)
+    order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
 def make_session_factory(db_url: str) -> sessionmaker:
     engine = create_engine(db_url, connect_args={"check_same_thread": False})
 

@@ -12,10 +12,15 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from . import api_extra
+from .bots import BotRunner
 from .broker import BrokerError, Leg
 from .config import Settings
-from .db import Account, ActivityLog, PriceRule, ScheduledOrder, as_utc, make_session_factory, utcnow
+from .db import (Account, ActivityLog, PriceRule, ScheduledOrder, StrategyBot, as_utc,
+                 make_session_factory, utcnow)
 from .engine import Engine, compute_metric
+from .marketdata import MarketData
+from .strategies.registry import Registry
 from .schemas import AccountIn, OrderIn, PreviewIn, RuleIn, ScheduleIn, StatusIn
 from .vault import SecretBox
 
@@ -28,6 +33,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     sessions = make_session_factory(settings.db_url)
     vault = SecretBox(settings.data_dir)
     engine = Engine(settings, sessions, vault)
+    registry = Registry(settings.data_dir / "plugins")
+    market = MarketData()
+    bots = BotRunner(engine, registry)
 
     if settings.seed_demo:
         with sessions() as s:
@@ -39,11 +47,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(_app: FastAPI):
         if settings.run_scheduler:
             engine.start()
+            bots.load()
         yield
         engine.shutdown()
 
     app = FastAPI(title="Alpaca Manager", lifespan=lifespan)
     app.state.engine = engine
+    app.state.bots = bots
+    app.state.registry = registry
     app.state.settings = settings
 
     def db():
@@ -164,6 +175,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         acct = get_account(s, account_id)
         for sched in acct.schedules:
             engine.unschedule(sched.id)
+        for bot_id in s.scalars(select(StrategyBot.id).where(StrategyBot.account_id == account_id)):
+            bots.unschedule(bot_id)
         name = acct.name
         s.delete(acct)
         s.commit()
@@ -346,6 +359,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def evaluate_now():
         engine.evaluate_rules()
         return {"ok": True}
+
+    api_extra.register(app, engine=engine, db=db, get_account=get_account, broker_call=broker_call,
+                       local_iso=local_iso, registry=registry, market=market, bots=bots)
 
     # ------------------------------------------------------------------ #
     # UI

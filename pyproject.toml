@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "alpaca-manager"
-version = "0.1.0"
+version = "0.2.0"
 description = "A friendly web app for managing Alpaca brokerage accounts, with scheduled orders and price rules."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -15,6 +15,8 @@ dependencies = [
     "sqlalchemy>=2.0",
     "apscheduler>=3.10,<4",
     "cryptography>=42",
+    "pandas>=1.5",
+    "numpy>=1.23",
 ]
 
 [project.optional-dependencies]
@@ -27,7 +29,7 @@ alpaca-manager = "alpaca_manager.cli:main"
 include = ["alpaca_manager*"]
 
 [tool.setuptools.package-data]
-alpaca_manager = ["static/*"]
+alpaca_manager = ["static/*", "static/vendor/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

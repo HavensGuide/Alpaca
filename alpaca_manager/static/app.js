@@ -228,8 +228,11 @@ document.addEventListener("click", (e) => {
   if (go) showTab(go.dataset.goto);
 });
 
+/* Each tab registers {load, refresh?}. load runs when the tab is shown or the
+   account changes; refresh (default: load) runs on the 10-second timer. */
+const TABS = {};
 function refreshTab() {
-  ({ overview: loadOverview, schedules: loadSchedules, rules: loadRules, activity: loadActivity, accounts: loadAccounts }[state.tab] || (() => {}))();
+  (TABS[state.tab]?.load || (() => {}))();
 }
 
 async function loadAccountsList() {
@@ -265,7 +268,7 @@ $("#account-select").onchange = (e) => {
 /* ------------------------------------------------------------------ */
 /* Overview                                                            */
 /* ------------------------------------------------------------------ */
-async function loadOverview() {
+async function loadOverview({ light = false } = {}) {
   const none = !state.accountId;
   $("#no-account").classList.toggle("hidden", !none);
   $("#overview-body").classList.toggle("hidden", none);
@@ -275,6 +278,10 @@ async function loadOverview() {
     renderStats(data.account);
     renderPositions(data.positions);
     renderClock(data.clock);
+    if (!light) {
+      loadDashEquity();
+      loadDashNews(data.positions.map((p) => p.symbol));
+    }
   } catch (e) {
     $("#stats").innerHTML = `<div class="card" style="grid-column:1/-1"><b>Couldn't reach this account.</b>
       <p class="error-text">${esc(e.message)}</p><p class="muted">Check the API keys on the Accounts tab, and that paper keys are used with a paper account.</p></div>`;
@@ -368,7 +375,58 @@ $("#orders-filter").onclick = (e) => {
   $$("#orders-filter button").forEach((x) => x.classList.toggle("active", x === b));
   loadOrders();
 };
-$("#refresh-overview").onclick = loadOverview;
+$("#refresh-overview").onclick = () => loadOverview();
+
+/* Dashboard: portfolio value chart + news for holdings */
+state.dashPeriod = "1M";
+let dashChart = null;
+async function loadDashEquity() {
+  const host = $("#dash-equity");
+  try {
+    const h = await api("GET", `/api/accounts/${state.accountId}/history?period=${state.dashPeriod}&benchmark=`);
+    if (dashChart) { dashChart.destroy(); dashChart = null; }
+    if (h.points.length < 2) { host.innerHTML = `<div class="empty-inline">Not enough history yet for this period.</div>`; $("#dash-equity-change").textContent = ""; return; }
+    dashChart = makeChart(host, { height: 220, intraday: ["1D", "1W"].includes(state.dashPeriod) });
+    dashChart.addArea("Portfolio value", h.points.map((p) => ({ t: p.t, v: p.equity })), { color: seriesColor(0) });
+    dashChart.fit();
+    dashChart.renderLegend();
+    const first = h.points[0].equity, last = h.points[h.points.length - 1].equity;
+    $("#dash-equity-change").innerHTML = `${signed(last / first - 1)} <span class="muted">over ${{ "1D": "the day", "1W": "the week", "1M": "the month", "3M": "3 months", "1Y": "the year", ALL: "all time" }[state.dashPeriod]}</span>`;
+  } catch (e) { host.innerHTML = `<div class="empty-inline error-text">${esc(e.message)}</div>`; }
+}
+$("#dash-period").onclick = (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  state.dashPeriod = b.dataset.p;
+  $$("#dash-period button").forEach((x) => x.classList.toggle("active", x === b));
+  loadDashEquity();
+};
+
+async function loadDashNews(symbols) {
+  const box = $("#dash-news");
+  try {
+    const items = await api("GET", `/api/market/news?account_id=${state.accountId}&symbols=${encodeURIComponent(symbols.join(","))}&limit=6`);
+    box.innerHTML = renderNews(items, symbols.length ? "No recent news for your holdings." : "No recent news.");
+  } catch (e) { box.innerHTML = `<div class="empty-inline error-text">${esc(e.message)}</div>`; }
+}
+
+function timeAgo(iso) {
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (s < 3600) return `${Math.max(1, Math.round(s / 60))}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+}
+
+function renderNews(items, emptyText = "No recent news.") {
+  if (!items.length) return `<div class="empty-inline">${esc(emptyText)}</div>`;
+  const simulated = items.some((n) => n.simulated);
+  return (simulated ? `<div class="callout warn small-note">Demo account: these headlines are simulated. Connect a paper account for real Alpaca news.</div>` : "") +
+    `<ul class="news">${items.map((n) => `<li>
+      ${n.image ? `<img src="${esc(n.image)}" alt="" loading="lazy">` : ""}
+      <div><a ${n.url ? `href="${esc(n.url)}" target="_blank" rel="noopener noreferrer"` : ""} class="news-head">${esc(n.headline)}</a>
+      <div class="news-meta">${esc(n.source || "")} · ${timeAgo(n.created_at)}${n.symbols?.length ? ` · ${n.symbols.slice(0, 4).map((s) => `<span class="sym-tag">${esc(s)}</span>`).join(" ")}` : ""}</div></div>
+    </li>`).join("")}</ul>`;
+}
 
 /* ------------------------------------------------------------------ */
 /* Trade                                                               */
@@ -740,6 +798,11 @@ async function loadActivity() {
     : `<div class="empty-inline">Nothing yet.</div>`;
 }
 $("#activity-this-account").onchange = loadActivity;
+Object.assign(TABS, {
+  overview: { load: loadOverview, refresh: () => loadOverview({ light: true }) },
+  schedules: { load: loadSchedules }, rules: { load: loadRules },
+  activity: { load: loadActivity }, accounts: { load: loadAccounts, refresh: null }, trade: { load() {}, refresh: null },
+});
 
 /* ------------------------------------------------------------------ */
 /* Accounts                                                            */
@@ -810,7 +873,7 @@ $("#new-account").onclick = () => accountForm();
 /* ------------------------------------------------------------------ */
 /* Boot                                                                */
 /* ------------------------------------------------------------------ */
-(async function boot() {
+async function boot() {
   try { state.status = await api("GET", "/api/status"); } catch { /* defaults */ }
   $$(".tz").forEach((x) => (x.textContent = `${tzShort()} (${state.status.timezone})`));
   await loadAccountsList().catch((e) => toast(e.message, true));
@@ -820,6 +883,8 @@ $("#new-account").onclick = () => accountForm();
   // Keep the visible tab fresh (not while a form is open).
   setInterval(() => {
     if (document.hidden || !$("#modal").classList.contains("hidden")) return;
-    if (["overview", "rules", "activity", "schedules"].includes(state.tab)) refreshTab();
+    const t = TABS[state.tab];
+    if (t && t.refresh !== null) (t.refresh || t.load)();
   }, 10000);
-})();
+}
+window.addEventListener("DOMContentLoaded", boot);

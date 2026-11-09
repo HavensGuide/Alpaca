@@ -1,10 +1,33 @@
 # Alpaca Manager
 
 A friendly local web app for managing one or more [Alpaca](https://alpaca.markets) brokerage
-accounts, with automation for stocks:
+accounts: a trading dashboard, market charts and news, performance reports, automation for
+stocks, and a plugin system for backtesting and paper-trading your own strategies.
 
-- **Overview**: portfolio value, today's change, cash, buying power, positions and orders,
-  with one-click buy, sell, sell-all and cancel.
+- **Dashboard**: portfolio value, today's change, cash and buying power; a portfolio-value chart
+  (1D to all time); news for your holdings; positions and orders with one-click buy, sell,
+  sell-all and cancel.
+- **Markets**: candlestick or line charts for any stock, an index (via ETFs such as SPY, QQQ,
+  DIA and IWM), or a **basket** you define.
+  - **Rolling averages and indicators**: SMA 20/50/200, EMA 20, Bollinger bands, any custom
+    SMA/EMA/Bollinger window, a volume band, and an RSI panel.
+  - **Ranges and bar sizes**: ranges from 1D to 5Y, with bars from 5 minutes to 1 week.
+  - **Compare** up to six series as % change from the start of the range, with volatility and
+    drawdown for each.
+  - A **watchlist** with live prices, and **news** from Alpaca's news API for whatever you're
+    viewing.
+  - A data table for every chart.
+- **Performance**: the account's value against a benchmark (SPY by default), with return,
+  excess return, max drawdown, Sharpe and volatility. Closed trades are matched first-in,
+  first-out to show realized P&L, win rate, profit factor, P&L by symbol and recent round trips.
+- **Strategies (plugins)**:
+  - **Backtest** any strategy on historical bars. You get return vs a buy-and-hold benchmark,
+    CAGR, Sharpe, Sortino, max drawdown, an equity curve, a drawdown chart, P&L by symbol, and
+    a trade list. Every run is saved for comparison.
+  - **Paper bots** run the same strategy on a schedule against a paper or demo account, with
+    their own money allocation, and track value against the benchmark.
+  - **Write your own strategy** as a small Python class. See
+    [Writing a strategy plugin](#writing-a-strategy-plugin).
 - **Trade**: place market or limit orders in shares or dollars. Several stocks can go in at once
   as a basket order, with a review step first.
 - **Scheduled orders**: buy or sell at a set time, either once ("sell 5 TSLA on Friday at 3:30 PM")
@@ -66,7 +89,15 @@ alpaca_manager/
   db.py       SQLite models: accounts, schedules, rules, activity log
   schemas.py  input validation (order rules such as "dollar orders must be market/day")
   vault.py    encrypts API secrets at rest
+  marketdata.py  chart ranges, caching, indicators, baskets, statistics
+  indicators.py  SMA / EMA / RSI / Bollinger (pandas)
+  analytics.py   FIFO round trips, return/risk statistics
+  backtest.py    bar-by-bar backtester (shared rebalance logic with the bots)
+  bots.py        scheduled paper-trading bots with their own ledgers
+  api_extra.py   API for markets, baskets, performance, strategies, backtests, bots
+  strategies/    plugin API (base.py), built-ins, and plugin discovery (registry.py)
   static/     the single-page UI (plain HTML/CSS/JS, no build step)
+  static/vendor/ TradingView Lightweight Charts 4.2.3 (Apache-2.0, licence alongside)
 ```
 
 - **Automation only runs while the app is running.** If the app was off when a one-time schedule
@@ -81,6 +112,93 @@ alpaca_manager/
 - Each order in a schedule or rule is submitted separately. If one fails (say, not enough
   buying power), the others still go through, and the failure shows in the Activity log.
 - Demo accounts are kept in memory. Their simulated positions reset when the app restarts.
+
+## Strategies, backtests and paper bots
+
+Five strategies are built in: **buy and hold**, a **moving-average crossover** (SMA or EMA),
+**RSI mean reversion**, **momentum rotation** (hold the top-K by lookback return), and
+**Bollinger band reversion**.
+
+**Backtests** use Alpaca's split- and dividend-adjusted historical bars, with daily, hourly or
+weekly bars. They work like this:
+
+- A strategy decides on a bar's close, and its orders fill at the **next bar's open**, so there
+  is no look-ahead.
+- Fills include slippage, and you can set a commission in basis points.
+- Positions are long-only and in whole shares.
+- Rebalances smaller than 1% of equity are skipped.
+
+**Paper bots** run once a day (at a time you choose), every hour, or every 15 minutes, only
+while the market is open. Each bot keeps its own ledger of cash and shares, so its results can
+be measured separately from anything else in the account. Bots place real orders on the paper
+account, so the orders show up there too.
+
+For safety, bots refuse to run on live-money accounts. Deleting a bot does not sell what it
+bought.
+
+A backtest is a model, not a promise. Real fills, gaps, halts and data differences mean a bot
+will not match its backtest exactly.
+
+### Writing a strategy plugin
+
+Drop a `.py` file into `<data-dir>/plugins/` (by default `~/.alpaca_manager/plugins/`). Then
+open **Strategies → Plugins → Reload plugins**. The page also shows a template you can copy.
+
+```python
+from alpaca_manager.strategies import Param, Strategy, indicators
+
+
+class PriceAboveAverage(Strategy):
+    key = "price_above_average"            # unique id (keep it stable)
+    name = "Price above average"
+    description = "Hold each symbol while its close is above its N-bar moving average."
+    params = {"window": Param(100, min=2, max=500, help="Moving-average window (bars)")}
+
+    def warmup(self):                      # bars of history needed first
+        return self.p["window"]
+
+    def on_bar(self, ctx):                 # called once per bar
+        weights = {}
+        for sym in ctx.symbols:
+            close = ctx.history(sym, self.p["window"])["close"]
+            avg = indicators.sma(close, self.p["window"]).iloc[-1]
+            weights[sym] = 1 / len(ctx.symbols) if close.iloc[-1] > avg else 0.0
+        return weights                     # target fraction of equity per symbol
+```
+
+- **`on_bar(ctx)`** returns **target weights**: `{symbol: fraction of equity}`. Omit a symbol
+  to leave it as it is, and return `None` to change nothing. Weights are long-only, and any total
+  over 1 is scaled down.
+- **`ctx`** gives you:
+  - `history(symbol, bars)`: an OHLCV DataFrame up to the current bar
+  - `closes(bars)`: closing prices of every symbol
+  - `close(symbol)`, `position(symbol)` and `weight(symbol)`
+  - `cash`, `equity`, `time` and `bar_index`
+  - `state`: a dict that persists between bars, and between runs for bots
+- **`params`** become form fields in the UI. Their values reach the strategy as `self.p[...]`.
+- **`precompute(frames)`** is optional. It computes indicators once for the whole history,
+  which makes backtests much faster; read a value with `series.iat[ctx.bar_index]`. Use only
+  rolling calculations here, so each value depends only on past bars.
+- `alpaca_manager.indicators` has `sma`, `ema`, `rsi`, `bollinger` and `returns`.
+- Installed packages can also provide strategies through an `alpaca_manager.strategies`
+  entry point.
+
+A plugin that fails to import is listed with its error instead of breaking the app. Plugins
+are ordinary Python that runs on your computer, so only add code you trust.
+
+## Market data notes
+
+- Charts, backtests and bots use the account's data feed. **IEX** is free and covers part of
+  US volume, so its intraday bars can be thin. **SIP** needs a paid subscription and gives
+  consolidated data.
+- "Indexes" are shown through ETFs that track them: SPY (S&P 500), QQQ (Nasdaq-100),
+  DIA (Dow 30), IWM (Russell 2000) and VTI (total market). Alpaca doesn't serve index values
+  directly.
+- Intraday charts show regular-session bars (9:30-16:00 New York time). Every time on a chart
+  is New York time.
+- Demo accounts use **simulated** prices, which are repeatable and correlated with a simulated
+  market, and **simulated** headlines. The UI labels both.
+- Trade analysis uses the most recent 500 closed orders, which is the most Alpaca returns at once.
 
 ## Security
 
@@ -101,6 +219,9 @@ pytest
 ```
 
 The tests use the demo broker and a mocked Alpaca SDK client, so they need no network or keys.
+
+Charts are drawn with [TradingView Lightweight Charts](https://github.com/tradingview/lightweight-charts),
+which is bundled in `static/vendor/` under the Apache-2.0 licence.
 
 > This software places real trades when connected to a live account. Test schedules and rules
 > on a paper account (and with **dry run**) first. Nothing here is financial advice.

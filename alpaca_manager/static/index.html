@@ -24,8 +24,11 @@
   </header>
 
   <nav class="tabs" role="tablist">
-    <button class="tab active" data-tab="overview">Overview</button>
+    <button class="tab active" data-tab="overview">Dashboard</button>
+    <button class="tab" data-tab="markets">Markets</button>
     <button class="tab" data-tab="trade">Trade</button>
+    <button class="tab" data-tab="performance">Performance</button>
+    <button class="tab" data-tab="strategies">Strategies</button>
     <button class="tab" data-tab="schedules">Schedules</button>
     <button class="tab" data-tab="rules">Price rules</button>
     <button class="tab" data-tab="activity">Activity</button>
@@ -43,6 +46,22 @@
       </div>
       <div id="overview-body">
         <div class="stats" id="stats"></div>
+        <div class="dash-grid">
+          <div class="card">
+            <div class="card-head">
+              <div><h2>Portfolio value</h2><div class="sub-line" id="dash-equity-change"></div></div>
+              <div class="seg" id="dash-period">
+                <button data-p="1D">1D</button><button data-p="1W">1W</button><button class="active" data-p="1M">1M</button><button data-p="3M">3M</button><button data-p="1Y">1Y</button><button data-p="ALL">All</button>
+              </div>
+            </div>
+            <div id="dash-equity"></div>
+            <div class="card-foot"><a href="#" data-goto="performance">Full performance report →</a></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>News for your holdings</h2><a href="#" data-goto="markets" class="small-link">Markets →</a></div>
+            <div id="dash-news" class="news-box"></div>
+          </div>
+        </div>
         <div class="card">
           <div class="card-head">
             <h2>Positions</h2>
@@ -61,6 +80,115 @@
           <div id="orders" class="table-wrap"></div>
         </div>
       </div>
+    </section>
+
+    <!-- MARKETS -->
+    <section id="tab-markets" class="panel">
+      <div class="mk-layout">
+        <div class="mk-main">
+          <div class="card">
+            <div class="mk-search">
+              <div class="search-box">
+                <input id="mk-symbol" placeholder="Symbol, e.g. AAPL" autocomplete="off" spellcheck="false" aria-label="Symbol">
+                <button class="btn primary" id="mk-view">View</button>
+                <button class="btn" id="mk-compare" title="Add to the chart to compare">+ Compare</button>
+              </div>
+              <div class="search-box">
+                <select id="mk-basket" aria-label="Baskets"><option value="">Baskets…</option></select>
+                <button class="btn ghost" id="mk-edit-basket">+ New basket</button>
+              </div>
+            </div>
+            <div class="mk-quick" id="mk-quick"></div>
+            <div class="mk-chips" id="mk-chips"></div>
+            <div class="mk-head" id="mk-head"></div>
+            <div class="mk-controls">
+              <div class="seg" id="mk-range"></div>
+              <label class="inline">Bars
+                <select id="mk-interval">
+                  <option value="">Auto</option><option value="5Min">5 min</option><option value="15Min">15 min</option>
+                  <option value="30Min">30 min</option><option value="1Hour">1 hour</option><option value="1Day">1 day</option><option value="1Week">1 week</option>
+                </select></label>
+              <div class="seg" id="mk-type"><button data-v="candles" class="active">Candles</button><button data-v="line">Line</button></div>
+            </div>
+            <div class="mk-overlays" id="mk-overlays"></div>
+            <div id="mk-chart" class="chart-wrap"></div>
+            <div id="mk-rsi" class="chart-wrap hidden"></div>
+            <div class="tiles" id="mk-stats"></div>
+            <details class="data-table"><summary>Show data table</summary><div id="mk-table" class="table-wrap"></div></details>
+          </div>
+        </div>
+        <aside class="mk-side">
+          <div class="card">
+            <div class="card-head"><h2>Watchlist</h2><button class="btn ghost small" id="wl-edit">Edit</button></div>
+            <div id="watchlist"></div>
+            <form id="wl-add" class="wl-add hidden"><input placeholder="Add symbol" aria-label="Add symbol to watchlist" spellcheck="false"><button class="btn small">Add</button></form>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>News</h2><span class="muted small" id="mk-news-for"></span></div>
+            <div id="mk-news" class="news-box"></div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- PERFORMANCE -->
+    <section id="tab-performance" class="panel">
+      <div class="section-head">
+        <div>
+          <h2>Performance</h2>
+          <p class="muted">How the selected account has done, compared with a benchmark, plus a breakdown of your closed trades.</p>
+        </div>
+        <div class="row-gap">
+          <label class="check"><input type="checkbox" id="pf-bench" checked> Compare with <input id="pf-bench-sym" value="SPY" class="mini-input" aria-label="Benchmark symbol"></label>
+          <div class="seg" id="pf-period">
+            <button data-p="1W">1W</button><button data-p="1M">1M</button><button class="active" data-p="3M">3M</button><button data-p="1Y">1Y</button><button data-p="ALL">All</button>
+          </div>
+        </div>
+      </div>
+      <div class="tiles" id="pf-tiles"></div>
+      <div class="card">
+        <div class="card-head"><h2>Portfolio value</h2></div>
+        <div id="pf-chart"></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Closed trades</h2><span class="muted small" id="pf-note"></span></div>
+        <div class="tiles" id="pf-trade-tiles"></div>
+        <div class="pf-grid">
+          <div><h3 class="h3">Profit &amp; loss by symbol</h3><div id="pf-by-symbol"></div></div>
+          <div><h3 class="h3">Recent round trips</h3><div id="pf-trades" class="table-wrap"></div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- STRATEGIES -->
+    <section id="tab-strategies" class="panel">
+      <div class="section-head">
+        <div>
+          <h2>Strategies</h2>
+          <p class="muted">Test trading models on historical data, then let them paper-trade and see how they really do.
+            Strategies are plugins: add your own Python file to extend the list.</p>
+        </div>
+        <div class="seg" id="st-view">
+          <button class="active" data-v="backtest">Backtest</button><button data-v="bots">Paper bots</button><button data-v="plugins">Plugins</button>
+        </div>
+      </div>
+      <div id="st-backtest">
+        <div class="bt-layout">
+          <div class="card bt-form-card"><h2>Backtest settings</h2><div id="bt-form"></div></div>
+          <div id="bt-results" class="bt-results"><div class="card empty"><h2>Run a backtest</h2><p>Pick a strategy and symbols, then press <b>Run backtest</b>. Results appear here.</p></div></div>
+        </div>
+        <div class="card"><div class="card-head"><h2>Past backtests</h2></div><div id="bt-history" class="table-wrap"></div></div>
+      </div>
+      <div id="st-bots" class="hidden">
+        <div class="section-head">
+          <p class="muted" style="max-width:680px">A bot runs a strategy on a schedule against a <b>paper</b> or <b>demo</b> account,
+            using its own slice of money so you can judge it on its own. It places real paper orders,
+            so they'll show up in the account. Live-money accounts can't run bots.</p>
+          <button class="btn primary" id="new-bot">+ New bot</button>
+        </div>
+        <div id="bot-list" class="cards"></div>
+      </div>
+      <div id="st-plugins" class="hidden"></div>
     </section>
 
     <!-- TRADE -->
@@ -144,6 +272,11 @@
   </div>
 
   <div id="toasts" aria-live="polite"></div>
+  <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
   <script src="/static/app.js"></script>
+  <script src="/static/charts.js"></script>
+  <script src="/static/markets.js"></script>
+  <script src="/static/performance.js"></script>
+  <script src="/static/strategies.js"></script>
 </body>
 </html>
