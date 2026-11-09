@@ -82,7 +82,11 @@ const currentAccount = () => state.accounts.find((a) => a.id === state.accountId
 /* Modal                                                               */
 /* ------------------------------------------------------------------ */
 const modal = {
-  open({ title, body, foot = [], small = false }) {
+  _onClose: null,
+  /* onClose runs however the dialog closes: a button, the X, Esc or a click outside. */
+  open({ title, body, foot = [], small = false, onClose = null }) {
+    modal._fireClose();
+    modal._onClose = onClose;
     $("#modal-title").textContent = title;
     const b = $("#modal-body");
     b.innerHTML = "";
@@ -94,7 +98,8 @@ const modal = {
     $("#modal").classList.remove("hidden");
     setTimeout(() => $("#modal-body input, #modal-body select")?.focus(), 30);
   },
-  close() { $("#modal").classList.add("hidden"); },
+  close() { $("#modal").classList.add("hidden"); modal._fireClose(); },
+  _fireClose() { const f = modal._onClose; modal._onClose = null; if (f) f(); },
 };
 $("#modal-close").onclick = modal.close;
 $("#modal").addEventListener("mousedown", (e) => { if (e.target.id === "modal") modal.close(); });
@@ -109,10 +114,10 @@ function button(label, cls, onClick) {
 function confirmDialog({ title, html, confirmLabel = "Confirm", danger = false }) {
   return new Promise((resolve) => {
     modal.open({
-      title, body: html, small: true,
+      title, body: html, small: true, onClose: () => resolve(false),
       foot: [
         button("Cancel", "", () => { modal.close(); resolve(false); }),
-        button(confirmLabel, danger ? "danger solid" : "primary", () => { modal.close(); resolve(true); }),
+        button(confirmLabel, danger ? "danger solid" : "primary", () => { resolve(true); modal.close(); }),
       ],
     });
   });
