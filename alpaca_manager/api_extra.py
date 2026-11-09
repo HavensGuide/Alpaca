@@ -60,6 +60,7 @@ class SeriesItem(BaseModel):
     kind: Literal["symbol", "basket"]
     symbol: str | None = None
     basket_id: int | None = None
+    corr: bool = True  # include in the correlation calculation
 
 
 class SeriesIn(BaseModel):
@@ -67,7 +68,8 @@ class SeriesIn(BaseModel):
     range: str = "6M"
     interval: str | None = None
     indicators: list[str] = Field(default=[], max_length=10)
-    items: list[SeriesItem] = Field(min_length=1, max_length=8)
+    items: list[SeriesItem] = Field(min_length=1, max_length=60)
+    correlation: int | None = Field(default=None, ge=5, le=500)  # rolling window in bars
 
 
 class BacktestIn(BaseModel):
@@ -150,14 +152,16 @@ def register(app: FastAPI, *, engine, db, get_account, broker_call, local_iso,
             if it.kind == "symbol":
                 if not it.symbol:
                     raise HTTPException(422, "symbol is required")
-                items.append({"kind": "symbol", "symbol": _symbol(it.symbol)})
+                items.append({"kind": "symbol", "symbol": _symbol(it.symbol), "corr": it.corr})
             else:
                 b = s.get(Basket, it.basket_id or 0)
                 if b is None:
                     raise HTTPException(404, "Basket not found")
-                items.append({"kind": "basket", "label": b.name, "basket_id": b.id, "items": b.items})
+                items.append({"kind": "basket", "label": b.name, "basket_id": b.id, "items": b.items,
+                              "corr": it.corr})
         try:
-            return market.series(acct.id, broker, items, body.range, body.interval, body.indicators)
+            return market.series(acct.id, broker, items, body.range, body.interval, body.indicators,
+                                 body.correlation)
         except (BrokerError, ValueError) as exc:
             raise HTTPException(502 if isinstance(exc, BrokerError) else 422, str(exc)) from exc
 

@@ -110,7 +110,7 @@ class MarketData:
 
     # ------------------------------------------------------------------ #
     def series(self, account_id: int, broker: Broker, items: list[dict], rng: str,
-               interval: str | None, specs: list[str]) -> dict:
+               interval: str | None, specs: list[str], corr_window: int | None = None) -> dict:
         """Build chart series for symbols and baskets.
 
         items: [{"kind": "symbol", "symbol": "AAPL"} |
@@ -126,7 +126,7 @@ class MarketData:
         days = (now - display_start).days + 1
         if estimate_bars(tf, days) > MAX_BARS:
             raise ValueError(f"{rng} of {tf} bars is too much data - choose a larger bar size")
-        warm = indicators.warmup_bars(specs)
+        warm = max(indicators.warmup_bars(specs), (corr_window or 0) + 1)
         fetch_start = display_start - timedelta(days=warmup_days(tf, warm))
 
         symbols = set()
@@ -138,6 +138,7 @@ class MarketData:
         frames = self.bars(account_id, broker, sorted(symbols), tf, fetch_start)
 
         out = []
+        corr_inputs: dict[str, pd.Series] = {}
         for it in items:
             if it["kind"] == "symbol":
                 frame = frames.get(it["symbol"])
@@ -158,8 +159,16 @@ class MarketData:
                 value = sum(closes[b["symbol"]] * float(b["qty"]) for b in it["items"])
                 frame = pd.DataFrame({"open": value, "high": value, "low": value, "close": value,
                                       "volume": np.nan})
-            out.append(self._one(label, it, frame, tf, specs, display_start, sessions))
-        return {"range": rng, "timeframe": tf, "series": out}
+            one = self._one(label, it, frame, tf, specs, display_start, sessions)
+            out.append(one)
+            if it.get("corr", True) and label not in corr_inputs:
+                corr_inputs[label] = frame["close"]
+        result = {"range": rng, "timeframe": tf, "series": out, "correlation": None}
+        if corr_window and len(corr_inputs) >= 2:
+            first_t = min((pd.Timestamp(s["line"][0]["t"], unit="s", tz="UTC")
+                           for s in out if s.get("line")), default=None)
+            result["correlation"] = correlation(corr_inputs, corr_window, first_t)
+        return result
 
     @staticmethod
     def _one(label, item, frame: pd.DataFrame, tf, specs, display_start, sessions) -> dict:
@@ -196,3 +205,32 @@ class MarketData:
             "bars": int(len(view)),
         }
         return result
+
+
+def correlation(closes: dict[str, pd.Series], window: int, display_from: pd.Timestamp | None) -> dict:
+    """Correlation of bar-to-bar log returns.
+
+    matrix  - pairwise correlation over the displayed range
+    rolling - average pairwise correlation over the last ``window`` bars, per bar
+              (for two series, simply their rolling correlation)
+    """
+    df = pd.DataFrame(closes).ffill().dropna()
+    rets = np.log(df).diff().dropna()
+    labels = list(rets.columns)
+    shown = rets[rets.index >= display_from] if display_from is not None else rets
+    if len(shown) < 3:
+        shown = rets
+    mat = shown.corr().reindex(index=labels, columns=labels)
+    pairs = [(a, b) for i, a in enumerate(labels) for b in labels[i + 1:]]
+    rolling = sum(rets[a].rolling(window, min_periods=window).corr(rets[b]) for a, b in pairs) / len(pairs)
+    if display_from is not None:
+        rolling = rolling[rolling.index >= display_from]
+    upper = [mat.loc[a, b] for a, b in pairs]
+    return {
+        "labels": labels,
+        "matrix": [[None if pd.isna(v) else round(float(v), 4) for v in row] for row in mat.to_numpy()],
+        "average": None if not upper or pd.isna(np.nanmean(upper)) else round(float(np.nanmean(upper)), 4),
+        "window": window,
+        "bars": int(len(shown)),
+        "rolling": analytics.to_points(rolling, 4),
+    }

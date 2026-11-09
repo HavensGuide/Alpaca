@@ -23,7 +23,8 @@ let mkReq = 0;
 
 function loadMkState() {
   const d = { series: [{ kind: "symbol", symbol: "SPY", label: "SPY", slot: 0 }], range: "6M", interval: "", type: "candles",
-    overlays: ["sma:50"], custom: null, volume: true, rsi: false };
+    overlays: ["sma:50"], custom: null, volume: true, rsi: false,
+    basketMode: "combined", corr: true, corrWindow: 60 };
   try { return { ...d, ...JSON.parse(localStorage.getItem("am-markets") || "{}") }; } catch { return d; }
 }
 function saveMkState() { try { localStorage.setItem("am-markets", JSON.stringify(mk)); } catch { /* ignore */ } }
@@ -38,9 +39,17 @@ function renderMkControls() {
   const compare = mk.series.length > 1 || mk.series[0]?.kind === "basket";
   $("#mk-type").classList.toggle("hidden", compare);
   const custom = mk.custom ? [{ spec: mk.custom, label: customLabel(mk.custom), slot: 5 }] : [];
-  $("#mk-overlays").innerHTML = mk.series.length > 1
-    ? `<span class="muted small">Comparing ${mk.series.length} series as % change from the start of the range. Remove series to get indicators back.</span>`
-    : `<span class="muted small">Overlays:</span> ` +
+  const oneBasket = mk.series.length === 1 && mk.series[0].kind === "basket";
+  const n = viewItems().length;
+  const basketSeg = oneBasket ? `<div class="seg small-seg" id="mk-bmode" title="Show the basket as one line or each stock separately">
+      <button data-v="combined" class="${mk.basketMode === "combined" ? "active" : ""}">Combined value</button>
+      <button data-v="separate" class="${mk.basketMode === "separate" ? "active" : ""}">Each stock</button></div><span class="sep"></span>` : "";
+  $("#mk-overlays").innerHTML = isMultiView()
+    ? basketSeg + `<span class="muted small">${n} series as % change from the start of the range.</span><span class="sep"></span>` +
+      `<button class="chip toggle ${mk.corr ? "on" : ""}" data-flag="corr" title="Rolling correlation of returns, shown in a panel under the chart">Correlation</button>` +
+      `<label class="inline">over <select id="mk-corr-win">${[20, 60, 120].map((w) => `<option value="${w}" ${w === mk.corrWindow ? "selected" : ""}>${w} bars</option>`).join("")}</select></label>` +
+      `<button class="chip" id="mk-matrix">Correlation matrix…</button>`
+    : basketSeg + `<span class="muted small">Overlays:</span> ` +
       [...MK_OVERLAYS, ...custom].map((o) => `<button class="chip toggle ${mk.overlays.includes(o.spec) ? "on" : ""}" data-ov="${o.spec}"><span class="lg-swatch" style="background:${seriesColor(o.slot)}"></span>${esc(o.label)}</button>`).join("") +
       `<button class="chip" id="mk-custom">${mk.custom ? "Change custom…" : "+ Custom…"}</button>` +
       `<span class="sep"></span>` +
@@ -100,7 +109,13 @@ $("#mk-range").onclick = (e) => {
 };
 $("#mk-interval").onchange = (e) => { mk.interval = e.target.value; saveMkState(); loadMarketsChart(); };
 $("#mk-type").onclick = (e) => { const b = e.target.closest("button"); if (b) { mk.type = b.dataset.v; saveMkState(); loadMarketsChart(); } };
+$("#mk-overlays").addEventListener("change", (e) => {
+  if (e.target.id === "mk-corr-win") { mk.corrWindow = Number(e.target.value); saveMkState(); loadMarketsChart(); }
+});
 $("#mk-overlays").onclick = (e) => {
+  const bm = e.target.closest("#mk-bmode button");
+  if (bm) { mk.basketMode = bm.dataset.v; saveMkState(); loadMarketsChart(); return; }
+  if (e.target.closest("#mk-matrix")) { showCorrMatrix(); return; }
   const ov = e.target.closest("[data-ov]");
   const flag = e.target.closest("[data-flag]");
   if (ov) {
@@ -200,7 +215,8 @@ async function loadMarketsChart() {
   renderMkControls();
   if (!state.accountId) { $("#mk-chart").innerHTML = `<div class="empty-inline">Add an account to load market data.</div>`; return; }
   if (!mk.series.length) mk.series = [{ kind: "symbol", symbol: "SPY", label: "SPY", slot: 0 }];
-  const compare = mk.series.length > 1;
+  const items = viewItems();
+  const compare = items.length > 1;
   const single = mk.series[0];
   const indicators = compare ? [] : [...mk.overlays, ...(mk.rsi ? ["rsi:14"] : [])];
   const req = ++mkReq;
@@ -209,14 +225,15 @@ async function loadMarketsChart() {
   try {
     data = await api("POST", "/api/market/series", {
       account_id: state.accountId, range: mk.range, interval: mk.interval || null, indicators,
-      items: mk.series.map((s) => (s.kind === "symbol" ? { kind: "symbol", symbol: s.symbol } : { kind: "basket", basket_id: s.basket_id })),
+      items: items.map((s) => (s.kind === "symbol" ? { kind: "symbol", symbol: s.symbol, corr: s.corr !== false } : { kind: "basket", basket_id: s.basket_id, corr: s.corr !== false })),
+      correlation: compare ? mk.corrWindow : null,
     });
   } catch (e) {
     if (req !== mkReq) return;
     $("#mk-chart").classList.remove("loading");
     destroyMkCharts();
     $("#mk-chart").innerHTML = `<div class="empty-inline error-text">${esc(e.message)}</div>`;
-    $("#mk-head").innerHTML = ""; $("#mk-stats").innerHTML = ""; $("#mk-rsi").classList.add("hidden");
+    $("#mk-head").innerHTML = ""; $("#mk-stats").innerHTML = ""; $("#mk-rsi").classList.add("hidden"); hideCorrPanel();
     return;
   }
   if (req !== mkReq) return; // a newer request superseded this one
@@ -231,8 +248,9 @@ async function loadMarketsChart() {
     $("#mk-head").innerHTML = ""; $("#mk-stats").innerHTML = ""; $("#mk-table").innerHTML = "";
     return;
   }
-  if (compare) renderCompare(data, good, intraday);
-  else renderSingle(data, good[0], single, intraday);
+  mkLastCorr = data.correlation;
+  if (compare) renderCompare(data, items, intraday);
+  else { hideCorrPanel(); renderSingle(data, good[0], single, intraday); }
   loadMkNews();
 }
 
@@ -303,25 +321,126 @@ function renderSingle(data, s, item, intraday) {
     rows.map((b) => `<tr><td>${fmtChartTime(toChartTime(b.t), intraday)}</td>${isSym ? `<td class="r num">${num2(b.o)}</td><td class="r num">${num2(b.h)}</td><td class="r num">${num2(b.l)}</td>` : ""}<td class="r num">${num2(b.c)}</td>${isSym ? `<td class="r num">${compact(b.v)}</td>` : ""}${cols.map((c) => `<td class="r num">${num2(idx[c].get(b.t))}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
 }
 
-function renderCompare(data, good, intraday) {
-  $("#mk-head").innerHTML = `<div class="mk-title"><h2>Comparison</h2><span class="muted">% change over ${esc(data.range)}</span></div>`;
+function itemColor(item) {
+  if (item.role === "total") return cssVar("--text");
+  if (item.slot == null || item.slot >= 6) return cssVar("--muted");
+  return seriesColor(item.slot);
+}
+
+function renderCompare(data, items, intraday) {
+  // data.series is in the same order as the requested items.
+  const pairs = data.series.map((s, i) => ({ s, item: items[i] })).filter((x) => !x.s.error);
+  const good = pairs.map((x) => x.s);
+  const separate = items.some((x) => x.role === "total");
+  $("#mk-head").innerHTML = `<div class="mk-title"><h2>${separate ? esc(items[0].label) : "Comparison"}</h2><span class="muted">${separate ? "each stock vs the combined basket, " : ""}% change over ${esc(data.range)}</span></div>`;
   const chart = makeChart($("#mk-chart"), { height: 420, intraday, percent: true });
   mkCharts.push(chart);
-  for (const s of good) {
-    const item = mk.series.find((x) => x.label === s.label) || { slot: 0 };
+  const extra = pairs.filter((x) => x.item.slot >= 6).length;
+  for (const { s, item } of pairs) {
     const base = s.line[0]?.v;
-    chart.addLine(s.label, s.line.map((p) => ({ t: p.t, v: (p.v / base - 1) * 100 })), { slot: item.slot });
+    const pts = s.line.map((p) => ({ t: p.t, v: (p.v / base - 1) * 100 }));
+    const faded = item.slot >= 6;
+    chart.addLine(item.role === "total" ? `${s.label} (combined)` : s.label, pts,
+      { color: itemColor(item), width: faded ? 1 : 2, dashed: item.role === "total", legend: !faded });
   }
+  if (extra) chart.legend.dataset.extra = `+${extra} more in grey`;
   chart.chart.priceScale("right").applyOptions({ scaleMargins: { top: 0.08, bottom: 0.08 } });
   chart.fit();
   chart.renderLegend();
+  if (extra) chart.legend.insertAdjacentHTML("beforeend", `<span class="lg-item muted">+${extra} more in grey (see table)</span>`);
   $("#mk-rsi").classList.add("hidden");
-  $("#mk-stats").innerHTML = `<div class="table-wrap" style="grid-column:1/-1"><table><thead><tr><th>Series</th><th class="r">Change</th><th class="r">Volatility (ann.)</th><th class="r">Max drawdown</th><th class="r">Last</th></tr></thead><tbody>${
-    good.map((s) => { const item = mk.series.find((x) => x.label === s.label) || { slot: 0 }; return `<tr><td><span class="lg-swatch" style="background:${seriesColor(item.slot)}"></span> <b>${esc(s.label)}</b></td><td class="r num">${signed(s.stats.change_pct)}</td><td class="r num">${pctPlain(s.stats.volatility)}</td><td class="r num">${pctPlain(s.stats.max_drawdown)}</td><td class="r num">${money(s.stats.last)}</td></tr>`; }).join("")}</tbody></table></div>`;
+  renderCorrPanel(chart, intraday);
+  const c = mkLastCorr;
+  const corrTile = c && c.average != null
+    ? `<div class="corr-summary">${c.labels.length === 2 ? `Correlation of ${esc(c.labels[0])} and ${esc(c.labels[1])}` : `Average correlation between the ${c.labels.length} ${separate ? "stocks" : "series"}`} over the range:
+        <b class="num">${c.average.toFixed(2)}</b> <span class="muted">(${corrWord(c.average)}, ${c.bars} bars of returns)</span>
+        <button class="btn small ghost" id="mk-matrix2">View matrix</button></div>` : "";
+  $("#mk-stats").innerHTML = corrTile + `<div class="table-wrap" style="grid-column:1/-1"><table><thead><tr><th>Series</th><th class="r">Change</th><th class="r">Volatility (ann.)</th><th class="r">Max drawdown</th><th class="r">Last</th></tr></thead><tbody>${
+    pairs.map(({ s, item }) => `<tr><td><span class="lg-swatch" style="background:${itemColor(item)}"></span> <b>${esc(s.label)}</b>${item.role === "total" ? ' <span class="muted">(combined)</span>' : ""}</td><td class="r num">${signed(s.stats.change_pct)}</td><td class="r num">${pctPlain(s.stats.volatility)}</td><td class="r num">${pctPlain(s.stats.max_drawdown)}</td><td class="r num">${money(s.stats.last)}</td></tr>`).join("")}</tbody></table></div>`;
+  const m2 = $("#mk-matrix2");
+  if (m2) m2.onclick = showCorrMatrix;
   const times = good[0].line.slice(-100).reverse();
   const maps = good.map((s) => new Map(s.line.map((p) => [p.t, p.v])));
   $("#mk-table").innerHTML = `<table><thead><tr><th>Time (NY)</th>${good.map((s) => `<th class="r">${esc(s.label)}</th>`).join("")}</tr></thead><tbody>${
     times.map((p) => `<tr><td>${fmtChartTime(toChartTime(p.t), intraday)}</td>${maps.map((m) => `<td class="r num">${num2(m.get(p.t))}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+}
+
+/* ---------------- view items, correlation ---------------- */
+let mkLastCorr = null;
+
+/* What actually gets drawn. A basket in "each stock" mode expands to its members
+   (colour slots 0-5, the rest grey) plus its combined value (excluded from correlation). */
+function viewItems() {
+  if (mk.series.length === 1 && mk.series[0].kind === "basket" && mk.basketMode === "separate") {
+    const b = mkBaskets.find((x) => x.id === mk.series[0].basket_id);
+    if (b) {
+      return [{ ...mk.series[0], role: "total", corr: false },
+        ...b.items.map((it, i) => ({ kind: "symbol", symbol: it.symbol, label: it.symbol, slot: i }))];
+    }
+  }
+  return mk.series;
+}
+const isMultiView = () => viewItems().length > 1;
+
+function corrWord(v) {
+  const a = Math.abs(v);
+  const strength = a >= 0.8 ? "very strong" : a >= 0.6 ? "strong" : a >= 0.4 ? "moderate" : a >= 0.2 ? "weak" : "little to none";
+  return v < 0 && a >= 0.2 ? `${strength}, opposite directions` : strength;
+}
+
+function hideCorrPanel() { const h = $("#mk-corr"); h.classList.add("hidden"); h.innerHTML = ""; }
+
+/* Correlation lives in its own panel under the price chart (it's on a -1..1 scale,
+   so it never shares an axis with % change), with the time axes kept in step. */
+function renderCorrPanel(main, intraday) {
+  const c = mkLastCorr;
+  if (!mk.corr || !c || !c.rolling.length) { hideCorrPanel(); return; }
+  const host = $("#mk-corr");
+  host.classList.remove("hidden");
+  const cc = makeChart(host, { height: 140, intraday, valueFormat: (v) => v.toFixed(2) });
+  mkCharts.push(cc);
+  const name = c.labels.length === 2 ? `Correlation ${c.labels[0]}–${c.labels[1]} (${c.window}-bar)` : `Average correlation (${c.window}-bar, ${c.labels.length} series)`;
+  const line = cc.addLine(name, c.rolling, { color: cssVar("--text") });
+  line.applyOptions({ autoscaleInfoProvider: () => ({ priceRange: { minValue: -1, maxValue: 1 } }) });
+  for (const [v, t] of [[0, "0"], [0.7, "0.7"], [-0.7, "-0.7"]]) {
+    line.createPriceLine({ price: v, color: cssVar("--muted"), lineWidth: 1, lineStyle: v === 0 ? 0 : 2, axisLabelVisible: false, title: t });
+  }
+  cc.fit();
+  cc.renderLegend();
+  syncTimeScales(main, cc);
+}
+
+/* Diverging scale: blue (negative) - grey (0) - red (positive). */
+function corrColor(v) {
+  const dark = isDark();
+  const mid = dark ? [56, 56, 53] : [240, 239, 236];
+  const pos = dark ? [230, 103, 103] : [227, 73, 72];
+  const neg = dark ? [57, 135, 229] : [42, 120, 214];
+  const t = Math.min(1, Math.abs(v));
+  const end = v >= 0 ? pos : neg;
+  const rgb = mid.map((m, i) => Math.round(m + (end[i] - m) * t));
+  return { bg: `rgb(${rgb.join(",")})`, fg: t > 0.55 ? "#fff" : "var(--text)" };
+}
+
+function showCorrMatrix() {
+  const c = mkLastCorr;
+  if (!c) { toast("Add at least two series to see correlations", true); return; }
+  const L = c.labels;
+  const body = el(`<div>
+    <p class="muted" style="margin-top:0">Correlation of ${c.bars} bar-to-bar returns over the selected range (${esc(mk.range)}).
+      1 = always move together, 0 = unrelated, -1 = always move opposite.</p>
+    <div class="table-wrap"><table class="corr-matrix"><thead><tr><th></th>${L.map((l) => `<th class="r">${esc(l)}</th>`).join("")}</tr></thead>
+      <tbody>${L.map((row, i) => `<tr><th>${esc(row)}</th>${c.matrix[i].map((v, j) => {
+        if (v == null) return `<td class="r">—</td>`;
+        const col = corrColor(v);
+        return `<td class="r num" style="background:${col.bg};color:${col.fg}" title="${esc(row)} vs ${esc(L[j])}: ${v.toFixed(2)} (${corrWord(v)})">${v.toFixed(2)}</td>`;
+      }).join("")}</tr>`).join("")}</tbody></table></div>
+    <div class="corr-legend"><span>-1 opposite</span><span class="corr-ramp"></span><span>+1 together</span></div>
+    ${L.length > 2 ? `<p class="hint">Average of the pairs: <b>${c.average?.toFixed(2) ?? "—"}</b> (${c.average != null ? corrWord(c.average) : ""}).</p>` : ""}
+  </div>`);
+  const ramp = $(".corr-ramp", body);
+  ramp.style.background = `linear-gradient(90deg, ${corrColor(-1).bg}, ${corrColor(0).bg}, ${corrColor(1).bg})`;
+  modal.open({ title: "Correlation matrix", body, foot: [button("Close", "", modal.close)] });
 }
 
 /* ---------------- news ---------------- */

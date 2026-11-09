@@ -389,3 +389,12 @@ pre.code code { background: none; padding: 0; }
 input.masked { -webkit-text-security: disc; text-security: disc; font-family: ui-monospace, monospace; }
 #am-kid, #am-ksec { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .form-error { white-space: pre-line; }
+
+/* correlation */
+#mk-corr { margin-top: 2px; border-top: 1px solid var(--border); padding-top: 6px; }
+.small-seg button { padding: 4px 10px; font-size: .82rem; }
+.corr-summary { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: .92rem; padding: 4px 2px; }
+table.corr-matrix th, table.corr-matrix td { padding: 8px 10px; }
+table.corr-matrix td { border: 2px solid var(--surface); border-radius: 6px; min-width: 64px; font-weight: 600; }
+.corr-legend { display: flex; align-items: center; gap: 8px; font-size: .8rem; color: var(--muted); margin-top: 10px; }
+.corr-ramp { flex: 0 0 180px; height: 10px; border-radius: 5px; }

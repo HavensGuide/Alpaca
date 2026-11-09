@@ -94,6 +94,8 @@ function makeChart(host, { height = 360, intraday = false, valueFormat = (v) => 
     timeScale: { ...chartTheme().timeScale, timeVisible: intraday, secondsVisible: false, rightOffset: 2, fixLeftEdge: true, fixRightEdge: true },
     handleScale: { axisPressedMouseMove: { time: true, price: false } },
   });
+  // Same axis width on every chart so stacked panels line up vertically.
+  chart.priceScale("right").applyOptions({ minimumWidth: 84 });
   const entries = []; // {name, series, color, kind, data(map)}
 
   const w = {
@@ -189,13 +191,14 @@ function hexA(color, alpha) {
   return c;
 }
 
-/* Keep a secondary chart's time axis in step with a main chart (e.g. RSI under price). */
+/* Keep a secondary chart's time axis in step with a main chart (e.g. RSI under price).
+   Synced by time, not bar position, so panels whose series start later still line up. */
 function syncTimeScales(a, b) {
   let lock = false;
-  const link = (src, dst) => src.chart.timeScale().subscribeVisibleLogicalRangeChange((r) => {
+  const link = (src, dst) => src.chart.timeScale().subscribeVisibleTimeRangeChange((r) => {
     if (lock || !r) return;
     lock = true;
-    dst.chart.timeScale().setVisibleLogicalRange(r);
+    try { dst.chart.timeScale().setVisibleRange(r); } catch { /* range outside dst's data */ }
     lock = false;
   });
   link(a, b);

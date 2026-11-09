@@ -293,3 +293,36 @@ def test_alpaca_market_data_mapping():
     broker._trading.get_portfolio_history = lambda history_filter=None, **kw: hist
     assert broker.get_portfolio_history("1M") == [{"t": 2, "equity": 100.0, "pl": 0.0},
                                                   {"t": 3, "equity": 110.0, "pl": 10.0}]
+
+
+def test_correlation_matrix_and_rolling():
+    from alpaca_manager.marketdata import correlation
+
+    rng = np.random.default_rng(0)
+    idx = pd.date_range("2024-01-01", periods=300, freq="B", tz="UTC")
+    base = np.cumsum(rng.normal(0, 0.01, 300))
+    a = pd.Series(100 * np.exp(base), index=idx)
+    b = pd.Series(50 * np.exp(base * 1.0 + np.cumsum(rng.normal(0, 0.001, 300))), index=idx)  # ~same moves
+    c = pd.Series(80 * np.exp(-base), index=idx)  # opposite moves
+    out = correlation({"A": a, "B": b, "C": c}, 20, idx[100])
+    m = dict(zip(out["labels"], out["matrix"]))
+    assert m["A"][0] == pytest.approx(1.0) and m["A"][1] > 0.95 and m["A"][2] < -0.99
+    assert out["bars"] == 200 and len(out["rolling"]) == 200
+    assert out["average"] == pytest.approx(np.mean([m["A"][1], m["A"][2], m["B"][2]]), abs=1e-3)
+
+
+def test_series_endpoint_returns_correlation(client, demo):
+    acct_id, _ = demo
+    b = client.post("/api/baskets", json={"name": "Trio", "items": [
+        {"symbol": "AAPL", "qty": 1}, {"symbol": "MSFT", "qty": 1}, {"symbol": "SPY", "qty": 1}]}).json()
+    items = [{"kind": "basket", "basket_id": b["id"], "corr": False}] + [
+        {"kind": "symbol", "symbol": s} for s in ("AAPL", "MSFT", "SPY")]
+    r = client.post("/api/market/series", json={"account_id": acct_id, "range": "1Y", "items": items,
+                                                "correlation": 60})
+    assert r.status_code == 200, r.text
+    c = r.json()["correlation"]
+    assert c["labels"] == ["AAPL", "MSFT", "SPY"] and len(c["matrix"]) == 3  # basket excluded
+    assert -1 <= c["average"] <= 1 and c["rolling"]
+    # Without the parameter, nothing extra is computed.
+    r = client.post("/api/market/series", json={"account_id": acct_id, "range": "1Y", "items": items})
+    assert r.json()["correlation"] is None
