@@ -59,7 +59,9 @@ function renderMkControls() {
   $("#mk-basket").innerHTML = `<option value="">Baskets…</option>` + mkBaskets.map((b) => `<option value="${b.id}">${esc(b.name)}</option>`).join("");
   const cur = mk.series.length === 1 && mk.series[0].kind === "basket" ? mk.series[0].basket_id : "";
   $("#mk-basket").value = cur || "";
-  $("#mk-edit-basket").textContent = cur ? "Edit basket" : "+ New basket";
+  // Edit applies to the basket on screen; New always creates another one.
+  $("#mk-edit-basket").classList.toggle("hidden", !cur);
+  $("#mk-compare-basket").classList.toggle("hidden", !mkBaskets.length);
 }
 const customLabel = (spec) => { const [k, w, x] = spec.split(":"); return k === "bb" ? `Bollinger ${w}${x ? `×${x}` : ""}` : `${k.toUpperCase()} ${w}`; };
 
@@ -164,7 +166,23 @@ $("#mk-basket").onchange = (e) => {
 };
 $("#mk-edit-basket").onclick = () => {
   const cur = mk.series.length === 1 && mk.series[0].kind === "basket" ? mkBaskets.find((b) => b.id === mk.series[0].basket_id) : null;
-  basketForm(cur);
+  if (cur) basketForm(cur);
+};
+$("#mk-new-basket").onclick = () => basketForm(null);
+/* Add a basket to whatever is on the chart (as its combined value). */
+$("#mk-compare-basket").onclick = () => {
+  if (!mkBaskets.length) return;
+  const body = el(`<div><div class="field"><label>Basket</label><select>${mkBaskets.map((b) => `<option value="${b.id}">${esc(b.name)}</option>`).join("")}</select></div></div>`);
+  modal.open({ title: "Compare a basket", body, small: true, foot: [button("Cancel", "", modal.close), button("Add to chart", "primary", () => {
+    const b = mkBaskets.find((x) => x.id === Number($("select", body).value));
+    modal.close();
+    if (!b) return;
+    if (mk.series.some((x) => x.kind === "basket" && x.basket_id === b.id)) { toast(`${b.name} is already on the chart`); return; }
+    if (mk.series.length >= MAX_COMPARE) { toast(`Compare up to ${MAX_COMPARE} series at once`, true); return; }
+    mk.series.push({ kind: "basket", basket_id: b.id, label: b.name, slot: freeSlot() });
+    saveMkState();
+    loadMarketsChart();
+  })] });
 };
 
 function basketForm(b = null) {
@@ -214,6 +232,9 @@ function destroyMkCharts() { mkCharts.forEach((c) => c.destroy()); mkCharts = []
 async function loadMarketsChart() {
   renderMkControls();
   if (!state.accountId) { $("#mk-chart").innerHTML = `<div class="empty-inline">Add an account to load market data.</div>`; return; }
+  // Drop baskets that no longer exist (e.g. deleted), and keep names current.
+  mk.series = mk.series.filter((x) => x.kind !== "basket" || mkBaskets.some((b) => b.id === x.basket_id));
+  mk.series.forEach((x) => { if (x.kind === "basket") x.label = mkBaskets.find((b) => b.id === x.basket_id).name; });
   if (!mk.series.length) mk.series = [{ kind: "symbol", symbol: "SPY", label: "SPY", slot: 0 }];
   const items = viewItems();
   const compare = items.length > 1;
