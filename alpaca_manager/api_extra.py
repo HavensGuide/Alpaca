@@ -265,9 +265,12 @@ def register(app: FastAPI, *, engine, db, get_account, broker_call, local_iso,
             raise HTTPException(422, f"period must be one of {', '.join(HISTORY_PERIODS)}")
         acct, broker = broker_of(s, account_id)
         positions = broker_call(broker.get_positions)
-        qty = {p["symbol"]: float(p["qty"]) for p in positions if p.get("qty")}
+        # Stock price history only covers US stocks/ETFs; crypto and options are left out.
+        skipped = sorted(p["symbol"] for p in positions if p.get("asset_class", "us_equity") != "us_equity")
+        qty = {p["symbol"]: float(p["qty"]) for p in positions
+               if p.get("qty") and p.get("asset_class", "us_equity") == "us_equity"}
         if not qty:
-            return {"period": period, "points": [], "members": {}}
+            return {"period": period, "points": [], "members": {}, "skipped": skipped}
         _, _, tf, days = HISTORY_PERIODS[period]
         start = datetime.now(timezone.utc) - timedelta(days=days + (4 if period == "1D" else 0))
         frames = broker_call(market.bars, acct.id, broker, sorted(qty), tf, start)
@@ -280,7 +283,7 @@ def register(app: FastAPI, *, engine, db, get_account, broker_call, local_iso,
         value = sum(closes[sym] * q for sym, q in qty.items() if sym in closes)
         return {"period": period, "points": analytics.to_points(value, 2),
                 "members": {sym: analytics.to_points(closes[sym], 4) for sym in closes.columns},
-                "missing": sorted(set(qty) - set(closes.columns))}
+                "missing": sorted(set(qty) - set(closes.columns)), "skipped": skipped}
 
     @app.get("/api/accounts/{account_id}/trades")
     def trade_performance(account_id: int, s: Session = Depends(db)):

@@ -96,7 +96,10 @@ const modal = {
     foot.forEach((x) => f.append(x));
     $(".modal-box").classList.toggle("small", small);
     $("#modal").classList.remove("hidden");
-    setTimeout(() => $("#modal-body input, #modal-body select")?.focus(), 30);
+    // Focus the first field - unless the user has already clicked into one.
+    setTimeout(() => {
+      if (!$("#modal").contains(document.activeElement)) $("#modal-body input, #modal-body select")?.focus();
+    }, 30);
   },
   close() { $("#modal").classList.add("hidden"); modal._fireClose(); },
   _fireClose() { const f = modal._onClose; modal._onClose = null; if (f) f(); },
@@ -418,6 +421,8 @@ async function loadDashEquity() {
       const h = await api("GET", `/api/accounts/${state.accountId}/holdings-history?period=${state.dashPeriod}`);
       points = h.points;
       members = h.members;
+      const left = [...(h.skipped || []), ...(h.missing || [])];
+      if (left.length) note.textContent += ` Not included (no stock price history): ${left.join(", ")}.`;
     }
     if (dashChart) { dashChart.destroy(); dashChart = null; }
     if (!points || points.length < 2) {

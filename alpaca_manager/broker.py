@@ -185,6 +185,7 @@ class AlpacaBroker:
                     "unrealized_pl": _f(p.unrealized_pl),
                     "unrealized_plpc": _f(p.unrealized_plpc),
                     "change_today": _f(p.change_today),
+                    "asset_class": _enum(getattr(p, "asset_class", None)) or "us_equity",
                 }
             )
         return out
@@ -520,6 +521,7 @@ class DemoBroker:
                         "unrealized_pl": round(mv - p["cost"], 2),
                         "unrealized_plpc": (mv - p["cost"]) / p["cost"] if p["cost"] else 0,
                         "change_today": px / self._open_prices[sym] - 1,
+                        "asset_class": "us_equity",
                     }
                 )
             return out

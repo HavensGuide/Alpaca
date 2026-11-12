@@ -412,3 +412,11 @@ def test_editing_keys_requires_matching_pair(client, engine):
 def test_ui_files_are_never_served_stale(client):
     assert client.get("/static/app.js").headers["cache-control"] == "no-cache"
     assert client.get("/").headers["cache-control"] == "no-cache"
+
+
+def test_ui_asset_urls_are_versioned(client):
+    html = client.get("/").text
+    import re as _re
+    urls = _re.findall(r'(?:src|href)="(/static/[^"]+)"', html)
+    assert urls and all("?v=" in u for u in urls)
+    assert client.get(urls[-1]).status_code == 200

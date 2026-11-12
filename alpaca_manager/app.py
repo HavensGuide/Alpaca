@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -25,6 +27,16 @@ from .schemas import AccountIn, OrderIn, PreviewIn, RuleIn, ScheduleIn, StatusIn
 from .vault import SecretBox
 
 STATIC = Path(__file__).parent / "static"
+
+
+def ui_version() -> str:
+    """Short hash of the UI files' names, sizes and modification times."""
+    h = hashlib.sha1()
+    for f in sorted(STATIC.rglob("*")):
+        if f.is_file():
+            st = f.stat()
+            h.update(f"{f.name}:{st.st_size}:{st.st_mtime_ns}".encode())
+    return h.hexdigest()[:10]
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -433,7 +445,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/", include_in_schema=False)
     def index(_: Request):
-        return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-cache"})
+        # Tag every script/stylesheet URL with a hash of the UI files, so after an
+        # update the browser must fetch the new code instead of an old cached copy.
+        html = (STATIC / "index.html").read_text(encoding="utf-8")
+        html = re.sub(r'((?:src|href)="/static/[^"?]+)"', rf'\1?v={ui_version()}"', html)
+        return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
     return app
 

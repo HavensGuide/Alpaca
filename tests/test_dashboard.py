@@ -338,3 +338,17 @@ def test_holdings_history_excludes_cash(client, demo):
     assert last == pytest.approx(expected, rel=1e-6)
     assert last < broker.cash  # demo holds far more cash than stock
     assert client.get(f"/api/accounts/{acct_id}/holdings-history?period=9Y").status_code == 422
+
+
+def test_holdings_history_skips_crypto_and_options(client, demo, monkeypatch):
+    acct_id, broker = demo
+    real = broker.get_positions
+
+    def with_crypto():
+        return real() + [{"symbol": "BTCUSD", "qty": 0.5, "market_value": 30000.0, "asset_class": "crypto"}]
+
+    monkeypatch.setattr(broker, "get_positions", with_crypto)
+    h = client.get(f"/api/accounts/{acct_id}/holdings-history?period=1M")
+    assert h.status_code == 200, h.text
+    body = h.json()
+    assert body["skipped"] == ["BTCUSD"] and "BTCUSD" not in body["members"] and body["points"]

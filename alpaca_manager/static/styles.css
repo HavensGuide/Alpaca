@@ -400,3 +400,9 @@ table.corr-matrix td { border: 2px solid var(--surface); border-radius: 6px; min
 .corr-ramp { flex: 0 0 180px; height: 10px; border-radius: 5px; }
 
 .dash-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: -2px 0 8px; }
+
+/* On phones the header wraps to several lines; let it scroll away instead of covering the page. */
+@media (max-width: 640px) {
+  .topbar { position: static; }
+  .mk-side, .bt-form-card { position: static; }
+}
