@@ -420,6 +420,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # ------------------------------------------------------------------ #
     # UI
     # ------------------------------------------------------------------ #
+    @app.middleware("http")
+    async def no_stale_ui(request: Request, call_next):
+        # Make the browser re-check the UI files on each load, so an update is
+        # never hidden behind an old cached copy (it still gets fast 304s).
+        response = await call_next(request)
+        if request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
     @app.get("/", include_in_schema=False)

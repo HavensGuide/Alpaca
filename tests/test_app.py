@@ -407,3 +407,8 @@ def test_editing_keys_requires_matching_pair(client, engine):
         assert engine.vault.decrypt(stored.secret_enc) == "new-secret"
     # Renaming alone keeps the keys.
     assert client.put(url, json={"name": "Renamed", "mode": "live"}).status_code == 200
+
+
+def test_ui_files_are_never_served_stale(client):
+    assert client.get("/static/app.js").headers["cache-control"] == "no-cache"
+    assert client.get("/").headers["cache-control"] == "no-cache"
